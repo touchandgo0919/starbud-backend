@@ -20,8 +20,44 @@ npm run dev
 npm run deploy
 ```
 
-## D1
+## Cloudflare D1 SQLite
+
+Create the remote D1 database:
 
 ```bash
-wrangler d1 execute starbud-db --local --file migrations/0001_initial.sql
+npm run d1:create
 ```
+
+Copy the returned `database_id` into `wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "starbud-db"
+database_id = "your-d1-database-id"
+```
+
+Apply migrations locally:
+
+```bash
+npm run d1:migrate:local
+```
+
+Apply migrations to Cloudflare:
+
+```bash
+npm run d1:migrate:remote
+```
+
+Deploy Worker:
+
+```bash
+npm run deploy
+```
+
+## API
+
+- `GET /health`
+- `POST /api/tasks`
+- `GET /api/tasks/today`
+- `POST /api/tasks/:id/complete`
