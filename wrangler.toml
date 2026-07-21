@@ -1,0 +1,10 @@
+name = "starbud-backend"
+main = "src/index.ts"
+compatibility_date = "2026-07-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "starbud-db"
+database_id = "replace-with-cloudflare-d1-id"
+
+# Durable Objects will be added when the child app WebSocket channel is implemented.
