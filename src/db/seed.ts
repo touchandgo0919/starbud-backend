@@ -57,8 +57,10 @@ export async function ensureDemoFamily(env: Env) {
 }
 
 export async function ensureDefaultUsers(env: Env) {
+  const passwordSuffix = env.INITIAL_PASSWORD_SUFFIX || "@local-dev";
+
   for (const user of defaultUsers) {
-    const passwordHash = await hashPassword(`${user.username}@2026`);
+    const passwordHash = await hashPassword(`${user.username}${passwordSuffix}`);
 
     await env.DB.prepare(
       `INSERT INTO users (id, username, password_hash, display_name, role)

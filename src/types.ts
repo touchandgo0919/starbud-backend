@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;
 }
 

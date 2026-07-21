@@ -49,15 +49,21 @@ Apply migrations to Cloudflare:
 npm run d1:migrate:remote
 ```
 
-This creates the base tables and adds the default account columns. The backend
-will seed these users automatically on login:
+This creates the base tables and adds the default account columns. Configure the
+initial password suffix as a Cloudflare secret before production use:
+
+```bash
+wrangler secret put INITIAL_PASSWORD_SUFFIX
+```
+
+The backend will seed these users automatically on login:
 
 | Username | Password | Role |
 | --- | --- | --- |
-| `wangyamei` | `wangyamei@2026` | Parent |
-| `zhaotao` | `zhaotao@2026` | Parent |
-| `zhaoyouning` | `zhaoyouning@2026` | Child |
-| `zhaojianing` | `zhaojianing@2026` | Child |
+| `wangyamei` | username + configured suffix | Parent |
+| `zhaotao` | username + configured suffix | Parent |
+| `zhaoyouning` | username + configured suffix | Child |
+| `zhaojianing` | username + configured suffix | Child |
 
 Production should use a custom JWT secret:
 
