@@ -1,11 +1,21 @@
-import { badRequest, jsonResponse, notFound } from "../http";
-import { completeTask, createTask, getTodayTasks } from "../services/tasks";
+import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
+import { getAuthUser } from "../services/auth";
+import { ensureDefaultUsers } from "../db/seed";
+import { completeTaskForUser, createTaskForUser, getTodayTasksForUser } from "../services/tasks";
 import type { CreateTaskInput, Env } from "../types";
 
 export async function handleTasks(request: Request, env: Env, url: URL) {
+  await ensureDefaultUsers(env);
+
+  const user = await getAuthUser(request, env);
+
+  if (!user) {
+    return unauthorized();
+  }
+
   if (request.method === "GET" && url.pathname === "/api/tasks/today") {
     const childId = url.searchParams.get("childId") || undefined;
-    return jsonResponse({ tasks: await getTodayTasks(env, childId) });
+    return jsonResponse({ tasks: await getTodayTasksForUser(env, user, childId) });
   }
 
   if (request.method === "POST" && url.pathname === "/api/tasks") {
@@ -16,7 +26,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
     }
 
     try {
-      const task = await createTask(env, input);
+      const task = await createTaskForUser(env, user, input);
       return jsonResponse({ task }, { status: 201 });
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "Invalid task.");
@@ -26,7 +36,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   const completeMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
 
   if (request.method === "POST" && completeMatch) {
-    const task = await completeTask(env, completeMatch[1]);
+    const task = await completeTaskForUser(env, user, completeMatch[1]);
 
     if (!task) {
       return notFound();

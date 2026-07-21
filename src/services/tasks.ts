@@ -1,6 +1,7 @@
 import { randomId } from "../utils";
-import type { CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
+import type { AuthUser, CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
 import { ensureDemoFamily } from "../db/seed";
+import { childIdForUser } from "./children";
 
 function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -54,6 +55,19 @@ export async function createTask(env: Env, input: CreateTaskInput) {
   return getTaskById(env, id);
 }
 
+export async function createTaskForUser(env: Env, user: AuthUser, input: CreateTaskInput) {
+  const childId = resolveTaskChildId(user, input.childId);
+
+  if (!childId) {
+    throw new Error("Task target is required.");
+  }
+
+  return createTask(env, {
+    ...input,
+    childId
+  });
+}
+
 export async function getTodayTasks(env: Env, childId?: string) {
   const demo = await ensureDemoFamily(env);
   const date = todayKey();
@@ -75,6 +89,16 @@ export async function getTodayTasks(env: Env, childId?: string) {
     .all<TaskRow>();
 
   return result.results.map(toTaskDto);
+}
+
+export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
+  const childId = resolveTaskChildId(user, requestedChildId);
+
+  if (!childId) {
+    return [];
+  }
+
+  return getTodayTasks(env, childId);
 }
 
 export async function completeTask(env: Env, taskId: string) {
@@ -99,6 +123,20 @@ export async function completeTask(env: Env, taskId: string) {
   return getTaskById(env, taskId);
 }
 
+export async function completeTaskForUser(env: Env, user: AuthUser, taskId: string) {
+  const task = await getTaskById(env, taskId);
+
+  if (!task) {
+    return null;
+  }
+
+  if (user.role === "child" && childIdForUser(user) !== task.childId) {
+    return null;
+  }
+
+  return completeTask(env, taskId);
+}
+
 export async function getTaskById(env: Env, taskId: string) {
   const date = todayKey();
   const row = await env.DB.prepare(
@@ -117,4 +155,12 @@ export async function getTaskById(env: Env, taskId: string) {
     .first<TaskRow>();
 
   return row ? toTaskDto(row) : null;
+}
+
+function resolveTaskChildId(user: AuthUser, requestedChildId?: string) {
+  if (user.role === "child") {
+    return childIdForUser(user);
+  }
+
+  return requestedChildId || "child-zhaoyouning";
 }

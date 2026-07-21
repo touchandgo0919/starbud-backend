@@ -1,4 +1,5 @@
 import { emptyResponse, jsonResponse, notFound } from "./http";
+import { handleAuth } from "./routes/auth";
 import { handleTasks } from "./routes/tasks";
 import type { Env } from "./types";
 
@@ -15,6 +16,12 @@ export default {
         ok: true,
         service: "starbud-backend"
       });
+    }
+
+    const authResponse = await handleAuth(request, env, url);
+
+    if (authResponse) {
+      return authResponse;
     }
 
     const taskResponse = await handleTasks(request, env, url);

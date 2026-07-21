@@ -49,6 +49,22 @@ Apply migrations to Cloudflare:
 npm run d1:migrate:remote
 ```
 
+This creates the base tables and adds the default account columns. The backend
+will seed these users automatically on login:
+
+| Username | Password | Role |
+| --- | --- | --- |
+| `wangyamei` | `wangyamei@2026` | Parent |
+| `zhaotao` | `zhaotao@2026` | Parent |
+| `zhaoyouning` | `zhaoyouning@2026` | Child |
+| `zhaojianing` | `zhaojianing@2026` | Child |
+
+Production should use a custom JWT secret:
+
+```bash
+wrangler secret put JWT_SECRET
+```
+
 Deploy Worker:
 
 ```bash
@@ -58,6 +74,9 @@ npm run deploy
 ## API
 
 - `GET /health`
+- `POST /api/auth/login`
+- `GET /api/me`
+- `GET /api/children`
 - `POST /api/tasks`
 - `GET /api/tasks/today`
 - `POST /api/tasks/:id/complete`

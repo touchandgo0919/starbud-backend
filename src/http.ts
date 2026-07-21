@@ -32,3 +32,7 @@ export function notFound() {
 export function badRequest(message: string) {
   return jsonResponse({ error: message }, { status: 400 });
 }
+
+export function unauthorized(message = "Unauthorized") {
+  return jsonResponse({ error: message }, { status: 401 });
+}
