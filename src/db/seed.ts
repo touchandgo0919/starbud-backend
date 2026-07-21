@@ -10,7 +10,7 @@ const defaultUsers: Array<{
   {
     id: "user-wangyamei",
     username: "wangyamei",
-    displayName: "王亚梅",
+    displayName: "王亚美",
     role: "parent"
   },
   {
@@ -22,13 +22,13 @@ const defaultUsers: Array<{
   {
     id: "user-zhaoyouning",
     username: "zhaoyouning",
-    displayName: "赵又宁",
+    displayName: "赵佑宁",
     role: "child"
   },
   {
     id: "user-zhaojianing",
     username: "zhaojianing",
-    displayName: "赵嘉宁",
+    displayName: "赵佳宁",
     role: "child"
   }
 ];
@@ -37,13 +37,13 @@ const defaultChildren = [
   {
     id: "child-zhaoyouning",
     userId: "user-zhaotao",
-    name: "赵又宁",
+    name: "赵佑宁",
     deviceId: "mac-zhaoyouning"
   },
   {
     id: "child-zhaojianing",
     userId: "user-zhaotao",
-    name: "赵嘉宁",
+    name: "赵佳宁",
     deviceId: "mac-zhaojianing"
   }
 ];
@@ -63,10 +63,8 @@ export async function ensureDefaultUsers(env: Env) {
     const passwordHash = await hashPassword(`${user.username}${passwordSuffix}`);
 
     await env.DB.prepare(
-      `INSERT INTO users (id, username, password_hash, display_name, role)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(username)
-       DO UPDATE SET display_name = excluded.display_name, role = excluded.role`
+      `INSERT OR IGNORE INTO users (id, username, password_hash, display_name, role)
+       VALUES (?, ?, ?, ?, ?)`
     )
       .bind(user.id, user.username, passwordHash, user.displayName, user.role)
       .run();
@@ -74,10 +72,8 @@ export async function ensureDefaultUsers(env: Env) {
 
   for (const child of defaultChildren) {
     await env.DB.prepare(
-      `INSERT INTO children (id, user_id, name, device_id)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(id)
-       DO UPDATE SET name = excluded.name, device_id = excluded.device_id`
+      `INSERT OR IGNORE INTO children (id, user_id, name, device_id)
+       VALUES (?, ?, ?, ?)`
     )
       .bind(child.id, child.userId, child.name, child.deviceId)
       .run();
