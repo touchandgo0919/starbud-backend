@@ -4,7 +4,7 @@ compatibility_date = "2026-07-21"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "starbud-db"
-database_id = "replace-with-cloudflare-d1-id"
+database_name = "starbud"
+database_id = "d92cfdd6-53c5-4345-a919-a27f96d79678"
 
 # Durable Objects will be added when the child app WebSocket channel is implemented.

@@ -33,7 +33,7 @@ Copy the returned `database_id` into `wrangler.toml`:
 ```toml
 [[d1_databases]]
 binding = "DB"
-database_name = "starbud-db"
+database_name = "starbud"
 database_id = "your-d1-database-id"
 ```
 
