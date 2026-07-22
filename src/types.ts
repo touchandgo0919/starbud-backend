@@ -1,12 +1,13 @@
 export interface Env {
   DB: D1Database;
+  ADMIN_INITIAL_PASSWORD?: string;
   INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;
 }
 
 export type RepeatType = "once" | "daily" | "weekdays" | "weekly";
 
-export type UserRole = "parent" | "child";
+export type UserRole = "admin" | "parent" | "child";
 
 export interface UserRow {
   id: string;
@@ -14,6 +15,7 @@ export interface UserRow {
   password_hash: string;
   display_name: string | null;
   role: UserRole;
+  active: number;
   created_at: string;
 }
 
@@ -22,6 +24,19 @@ export interface AuthUser {
   username: string;
   displayName: string;
   role: UserRole;
+}
+
+export interface AdminUserDto extends AuthUser {
+  active: boolean;
+  createdAt: string;
+}
+
+export interface SaveUserInput {
+  username?: string;
+  displayName?: string;
+  role?: UserRole;
+  active?: boolean;
+  password?: string;
 }
 
 export interface ChildDto {

@@ -5,7 +5,8 @@ import {
   completeTaskForUser,
   createTaskForUser,
   deleteTaskForUser,
-  getTodayTasksForUser
+  getTodayTasksForUser,
+  listTasksForUser
 } from "../services/tasks";
 import type { CreateTaskInput, Env } from "../types";
 
@@ -21,6 +22,17 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   if (request.method === "GET" && url.pathname === "/api/tasks/today") {
     const childId = url.searchParams.get("childId") || undefined;
     return jsonResponse({ tasks: await getTodayTasksForUser(env, user, childId) });
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/tasks") {
+    return jsonResponse({
+      tasks: await listTasksForUser(env, user, {
+        childId: url.searchParams.get("childId") || undefined,
+        status: url.searchParams.get("status") || undefined,
+        keyword: url.searchParams.get("keyword") || undefined,
+        repeatType: url.searchParams.get("repeatType") || undefined
+      })
+    });
   }
 
   if (request.method === "POST" && url.pathname === "/api/tasks") {

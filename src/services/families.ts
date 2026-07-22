@@ -2,20 +2,22 @@ import { randomId } from "../utils";
 import type { AuthUser, Env, FamilyDto, FamilyMemberDto, FamilyRow, UserRow } from "../types";
 
 const DEFAULT_RELATIONSHIPS = {
+  admin: "管理员",
   parent: "家长",
   child: "孩子"
 } as const;
 
 export async function listFamilies(env: Env, user: AuthUser) {
-  const result = await env.DB.prepare(
+  const query = user.role === "admin"
+    ? env.DB.prepare("SELECT * FROM families ORDER BY created_at ASC")
+    : env.DB.prepare(
     `SELECT families.*
      FROM families
      INNER JOIN family_members ON family_members.family_id = families.id
      WHERE family_members.user_id = ?
      ORDER BY families.created_at ASC`
-  )
-    .bind(user.id)
-    .all<FamilyRow>();
+  ).bind(user.id);
+  const result = await query.all<FamilyRow>();
 
   return Promise.all(result.results.map((family) => toFamilyDto(env, family, user)));
 }
@@ -54,9 +56,14 @@ export async function renameFamily(env: Env, user: AuthUser, familyId: string, n
 }
 
 export async function deleteFamily(env: Env, user: AuthUser, familyId: string) {
-  requireParent(user);
+  requireFamilyRole(user);
 
-  const result = await env.DB.prepare(
+  const result = user.role === "admin"
+    ? await env.DB.prepare(
+      `DELETE FROM families
+       WHERE id = ? AND is_default = 0`
+    ).bind(familyId).run()
+    : await env.DB.prepare(
     `DELETE FROM families
      WHERE id = ?
       AND created_by = ?
@@ -156,7 +163,9 @@ export async function removeFamilyMember(
 }
 
 async function getFamilyForUser(env: Env, familyId: string, user: AuthUser) {
-  const family = await env.DB.prepare(
+  const query = user.role === "admin"
+    ? env.DB.prepare("SELECT * FROM families WHERE id = ? LIMIT 1").bind(familyId)
+    : env.DB.prepare(
     `SELECT families.*
      FROM families
      INNER JOIN family_members ON family_members.family_id = families.id
@@ -164,7 +173,7 @@ async function getFamilyForUser(env: Env, familyId: string, user: AuthUser) {
      LIMIT 1`
   )
     .bind(familyId, user.id)
-    .first<FamilyRow>();
+  const family = await query.first<FamilyRow>();
 
   return family ? toFamilyDto(env, family, user) : null;
 }
@@ -187,7 +196,7 @@ async function toFamilyDto(env: Env, family: FamilyRow, user: AuthUser): Promise
       id: string;
       username: string;
       display_name: string | null;
-      role: "parent" | "child";
+      role: "admin" | "parent" | "child";
       relationship: string;
     }>();
 
@@ -206,17 +215,19 @@ async function toFamilyDto(env: Env, family: FamilyRow, user: AuthUser): Promise
     id: family.id,
     name: family.name,
     isOwner,
-    canManage: user.role === "parent",
-    canDelete: isOwner && !Boolean(family.is_default),
+    canManage: user.role === "parent" || user.role === "admin",
+    canDelete: (isOwner || user.role === "admin") && !Boolean(family.is_default),
     members,
     createdAt: family.created_at
   };
 }
 
 async function requireFamilyManager(env: Env, user: AuthUser, familyId: string) {
-  requireParent(user);
+  requireFamilyRole(user);
 
-  const family = await env.DB.prepare(
+  const query = user.role === "admin"
+    ? env.DB.prepare("SELECT * FROM families WHERE id = ? LIMIT 1").bind(familyId)
+    : env.DB.prepare(
     `SELECT families.*
      FROM families
      INNER JOIN family_members ON family_members.family_id = families.id
@@ -224,7 +235,7 @@ async function requireFamilyManager(env: Env, user: AuthUser, familyId: string) 
      LIMIT 1`
   )
     .bind(familyId, user.id)
-    .first<FamilyRow>();
+  const family = await query.first<FamilyRow>();
 
   if (!family) {
     throw new Error("无权维护该家庭。");
@@ -234,7 +245,11 @@ async function requireFamilyManager(env: Env, user: AuthUser, familyId: string) 
 }
 
 function requireParent(user: AuthUser) {
-  if (user.role !== "parent") {
+  requireFamilyRole(user);
+}
+
+function requireFamilyRole(user: AuthUser) {
+  if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长可以维护家庭。");
   }
 }

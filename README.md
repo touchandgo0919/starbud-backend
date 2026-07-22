@@ -64,6 +64,7 @@ The backend will seed these users automatically on login:
 
 | Username | Password | Role |
 | --- | --- | --- |
+| `admin` | `admin@2026` (or `ADMIN_INITIAL_PASSWORD`) | Admin |
 | `wangyamei` | username + configured suffix | Parent |
 | `zhaotao` | username + configured suffix | Parent |
 | `zhaoyouning` | username + configured suffix | Child |
@@ -73,6 +74,12 @@ Production should use a custom JWT secret:
 
 ```bash
 wrangler secret put JWT_SECRET
+```
+
+Override the seeded administrator password before production deployment:
+
+```bash
+wrangler secret put ADMIN_INITIAL_PASSWORD
 ```
 
 Deploy Worker:
@@ -96,5 +103,9 @@ npm run deploy
 - `DELETE /api/families/:id/members/:userId`
 - `POST /api/tasks`
 - `GET /api/tasks/today`
+- `GET /api/tasks` (filterable task list)
 - `POST /api/tasks/:id/complete`
-- `DELETE /api/tasks/:id` (parent only)
+- `DELETE /api/tasks/:id` (parent or admin)
+- `GET /api/admin/users` (admin only)
+- `POST /api/admin/users` (admin only)
+- `PATCH /api/admin/users/:id` (admin only)

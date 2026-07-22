@@ -36,3 +36,7 @@ export function badRequest(message: string) {
 export function unauthorized(message = "Unauthorized") {
   return jsonResponse({ error: message }, { status: 401 });
 }
+
+export function forbidden(message = "Forbidden") {
+  return jsonResponse({ error: message }, { status: 403 });
+}

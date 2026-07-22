@@ -58,13 +58,13 @@ export function toAuthUser(row: UserRow): AuthUser {
 }
 
 export async function findUserByUsername(env: Env, username: string) {
-  return env.DB.prepare("SELECT * FROM users WHERE username = ? LIMIT 1")
+  return env.DB.prepare("SELECT * FROM users WHERE username = ? AND active = 1 LIMIT 1")
     .bind(username)
     .first<UserRow>();
 }
 
 export async function findUserById(env: Env, userId: string) {
-  return env.DB.prepare("SELECT * FROM users WHERE id = ? LIMIT 1")
+  return env.DB.prepare("SELECT * FROM users WHERE id = ? AND active = 1 LIMIT 1")
     .bind(userId)
     .first<UserRow>();
 }

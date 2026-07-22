@@ -2,6 +2,7 @@ import { emptyResponse, jsonResponse, notFound } from "./http";
 import { handleAuth } from "./routes/auth";
 import { handleFamilies } from "./routes/families";
 import { handleTasks } from "./routes/tasks";
+import { handleUsers } from "./routes/users";
 import type { Env } from "./types";
 
 export default {
@@ -29,6 +30,12 @@ export default {
 
     if (familyResponse) {
       return familyResponse;
+    }
+
+    const userResponse = await handleUsers(request, env, url);
+
+    if (userResponse) {
+      return userResponse;
     }
 
     const taskResponse = await handleTasks(request, env, url);

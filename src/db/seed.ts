@@ -6,7 +6,15 @@ const defaultUsers: Array<{
   username: string;
   displayName: string;
   role: UserRole;
+  password?: string;
 }> = [
+  {
+    id: "user-admin",
+    username: "admin",
+    displayName: "系统管理员",
+    role: "admin",
+    password: "admin@2026"
+  },
   {
     id: "user-wangyamei",
     username: "wangyamei",
@@ -62,11 +70,15 @@ export async function ensureDefaultUsers(env: Env) {
   const passwordSuffix = env.INITIAL_PASSWORD_SUFFIX || "@local-dev";
 
   for (const user of defaultUsers) {
-    const passwordHash = await hashPassword(`${user.username}${passwordSuffix}`);
+    const password =
+      user.role === "admin"
+        ? env.ADMIN_INITIAL_PASSWORD || user.password || "admin@2026"
+        : `${user.username}${passwordSuffix}`;
+    const passwordHash = await hashPassword(password);
 
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO users (id, username, password_hash, display_name, role)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO users (id, username, password_hash, display_name, role, active)
+       VALUES (?, ?, ?, ?, ?, 1)`
     )
       .bind(user.id, user.username, passwordHash, user.displayName, user.role)
       .run();

@@ -2,6 +2,7 @@ import { randomId } from "../utils";
 import type { AuthUser, CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
 import { ensureDemoFamily } from "../db/seed";
 import { childIdForUser } from "./children";
+import { listChildren } from "./children";
 
 function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -101,6 +102,26 @@ export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedCh
   return getTodayTasks(env, childId);
 }
 
+export async function listTasksForUser(
+  env: Env,
+  user: AuthUser,
+  filters: { childId?: string; status?: string; keyword?: string; repeatType?: string }
+) {
+  const children = await listChildren(env, user);
+  const selectedChildren = filters.childId
+    ? children.filter((child) => child.id === filters.childId)
+    : children;
+  const groups = await Promise.all(selectedChildren.map((child) => getTodayTasks(env, child.id)));
+  const keyword = filters.keyword?.trim().toLocaleLowerCase() || "";
+
+  return groups
+    .flat()
+    .filter((task) => !filters.status || task.status === filters.status)
+    .filter((task) => !filters.repeatType || task.repeatType === filters.repeatType)
+    .filter((task) => !keyword || task.title.toLocaleLowerCase().includes(keyword))
+    .sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
+}
+
 export async function completeTask(env: Env, taskId: string) {
   const existing = await getTaskById(env, taskId);
 
@@ -130,7 +151,7 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     return null;
   }
 
-  if (user.role === "child" && childIdForUser(user) !== task.childId) {
+  if (user.role === "child" && (await childIdForUser(env, user)) !== task.childId) {
     return null;
   }
 
@@ -142,13 +163,13 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
 }
 
 export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string) {
-  if (user.role !== "parent") {
+  if (user.role !== "parent" && user.role !== "admin") {
     return false;
   }
 
   const task = await getTaskById(env, taskId);
 
-  if (!task || !(await canAccessChild(env, user, task.childId))) {
+  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) {
     return false;
   }
 
@@ -186,7 +207,20 @@ export async function getTaskById(env: Env, taskId: string) {
 
 async function resolveTaskChildId(env: Env, user: AuthUser, requestedChildId?: string) {
   if (user.role === "child") {
-    return childIdForUser(user);
+    return childIdForUser(env, user);
+  }
+
+  if (user.role === "admin") {
+    if (requestedChildId) {
+      const child = await env.DB.prepare("SELECT id FROM children WHERE id = ? LIMIT 1")
+        .bind(requestedChildId)
+        .first<{ id: string }>();
+      return child?.id || null;
+    }
+
+    const child = await env.DB.prepare("SELECT id FROM children ORDER BY name ASC LIMIT 1")
+      .first<{ id: string }>();
+    return child?.id || null;
   }
 
   if (requestedChildId) {

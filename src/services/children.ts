@@ -1,17 +1,24 @@
 import type { AuthUser, ChildDto, Env } from "../types";
 
-const childUserMap: Record<string, string> = {
-  zhaoyouning: "child-zhaoyouning",
-  zhaojianing: "child-zhaojianing"
-};
+export async function childIdForUser(env: Env, user: AuthUser) {
+  if (user.role !== "child") {
+    return null;
+  }
 
-export function childIdForUser(user: AuthUser) {
-  return childUserMap[user.username] || null;
+  const child = await env.DB.prepare(
+    "SELECT id FROM children WHERE child_user_id = ? LIMIT 1"
+  )
+    .bind(user.id)
+    .first<{ id: string }>();
+
+  return child?.id || null;
 }
 
 export async function listChildren(env: Env, user: AuthUser) {
-  const childId = childIdForUser(user);
-  const query = childId
+  const childId = await childIdForUser(env, user);
+  const query = user.role === "admin"
+    ? env.DB.prepare("SELECT id, name, device_id FROM children ORDER BY name ASC")
+    : childId
     ? env.DB.prepare("SELECT id, name, device_id FROM children WHERE id = ? ORDER BY name ASC").bind(childId)
     : env.DB.prepare(
         `SELECT DISTINCT children.id, children.name, children.device_id
