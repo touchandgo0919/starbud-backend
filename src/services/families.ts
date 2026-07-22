@@ -1,5 +1,14 @@
 import { randomId } from "../utils";
-import type { AuthUser, Env, FamilyDto, FamilyMemberDto, FamilyRow, UserRow } from "../types";
+import type {
+  AuthUser,
+  CreateChildInput,
+  Env,
+  FamilyDto,
+  FamilyMemberDto,
+  FamilyRow,
+  UserRow
+} from "../types";
+import { createChildUser } from "./users";
 
 const DEFAULT_RELATIONSHIPS = {
   admin: "管理员",
@@ -111,6 +120,31 @@ export async function addFamilyMember(
      DO UPDATE SET relationship = excluded.relationship`
   )
     .bind(familyId, member.id, normalizedRelationship)
+    .run();
+
+  return getFamilyForUser(env, familyId, user);
+}
+
+export async function createFamilyChild(
+  env: Env,
+  user: AuthUser,
+  familyId: string,
+  input: CreateChildInput
+) {
+  await requireFamilyManager(env, user, familyId);
+  const child = await createChildUser(env, input);
+
+  if (!child) {
+    throw new Error("子女账号创建失败。");
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO family_members (family_id, user_id, relationship)
+     VALUES (?, ?, ?)
+     ON CONFLICT(family_id, user_id)
+     DO UPDATE SET relationship = excluded.relationship`
+  )
+    .bind(familyId, child.id, normalizeRelationship(input.relationship, DEFAULT_RELATIONSHIPS.child))
     .run();
 
   return getFamilyForUser(env, familyId, user);

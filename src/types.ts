@@ -39,6 +39,19 @@ export interface SaveUserInput {
   password?: string;
 }
 
+export interface RegisterParentInput {
+  username?: string;
+  displayName?: string;
+  password?: string;
+}
+
+export interface CreateChildInput {
+  username?: string;
+  displayName?: string;
+  password?: string;
+  relationship?: string;
+}
+
 export interface ChildDto {
   id: string;
   name: string;

@@ -91,6 +91,7 @@ npm run deploy
 ## API
 
 - `GET /health`
+- `POST /api/auth/register`
 - `POST /api/auth/login`
 - `GET /api/me`
 - `GET /api/children`
@@ -99,6 +100,7 @@ npm run deploy
 - `PATCH /api/families/:id`
 - `DELETE /api/families/:id` (creator only; the default family is protected)
 - `POST /api/families/:id/members`
+- `POST /api/families/:id/children`
 - `PATCH /api/families/:id/members/:userId`
 - `DELETE /api/families/:id/members/:userId`
 - `POST /api/tasks`

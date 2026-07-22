@@ -1,10 +1,44 @@
 import { badRequest, jsonResponse, unauthorized } from "../http";
 import { ensureDefaultUsers } from "../db/seed";
-import { getAuthUser, loginUser } from "../services/auth";
+import { getAuthUser, loginUser, signToken } from "../services/auth";
 import { listChildren } from "../services/children";
-import type { Env } from "../types";
+import { registerParent } from "../services/users";
+import type { AuthUser, Env } from "../types";
 
 export async function handleAuth(request: Request, env: Env, url: URL) {
+  if (request.method === "POST" && url.pathname === "/api/auth/register") {
+    await ensureDefaultUsers(env);
+
+    const input = (await request.json().catch(() => null)) as {
+      username?: string;
+      displayName?: string;
+      password?: string;
+    } | null;
+
+    if (!input) {
+      return badRequest("Invalid JSON body.");
+    }
+
+    try {
+      const created = await registerParent(env, input);
+
+      if (!created) {
+        return badRequest("注册失败。");
+      }
+
+      const user: AuthUser = {
+        id: created.id,
+        username: created.username,
+        displayName: created.displayName,
+        role: created.role
+      };
+
+      return jsonResponse({ user, token: await signToken(env, user) }, { status: 201 });
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "注册失败。");
+    }
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     await ensureDefaultUsers(env);
 

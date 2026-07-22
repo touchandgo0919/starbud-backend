@@ -3,6 +3,7 @@ import { ensureDefaultUsers } from "../db/seed";
 import { getAuthUser } from "../services/auth";
 import {
   addFamilyMember,
+  createFamilyChild,
   createFamily,
   deleteFamily,
   listFamilies,
@@ -86,6 +87,28 @@ export async function handleFamilies(request: Request, env: Env, url: URL) {
       return jsonResponse({ family });
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "成员添加失败。");
+    }
+  }
+
+  const childrenMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/children$/);
+
+  if (childrenMatch && request.method === "POST") {
+    const input = (await request.json().catch(() => null)) as {
+      username?: string;
+      displayName?: string;
+      password?: string;
+      relationship?: string;
+    } | null;
+
+    if (!input) {
+      return badRequest("Invalid JSON body.");
+    }
+
+    try {
+      const family = await createFamilyChild(env, user, childrenMatch[1], input);
+      return jsonResponse({ family }, { status: 201 });
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "子女创建失败。");
     }
   }
 

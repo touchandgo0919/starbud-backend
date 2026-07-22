@@ -1,6 +1,15 @@
 import { randomId } from "../utils";
 import { hashPassword } from "./auth";
-import type { AdminUserDto, AuthUser, Env, SaveUserInput, UserRole, UserRow } from "../types";
+import type {
+  AdminUserDto,
+  AuthUser,
+  CreateChildInput,
+  Env,
+  RegisterParentInput,
+  SaveUserInput,
+  UserRole,
+  UserRow
+} from "../types";
 
 const roles: UserRole[] = ["admin", "parent", "child"];
 
@@ -42,6 +51,56 @@ export async function createUser(env: Env, actor: AuthUser, input: SaveUserInput
   if (role === "child") {
     await ensureChildProfile(env, id, displayName);
   }
+
+  return getUser(env, id);
+}
+
+export async function registerParent(env: Env, input: RegisterParentInput) {
+  const username = normalizeUsername(input.username);
+  const displayName = normalizeDisplayName(input.displayName, username);
+  const password = normalizePassword(input.password, true);
+  const id = randomId("user");
+
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
+    .bind(username)
+    .first<{ id: string }>();
+
+  if (existing) {
+    throw new Error("用户名已存在。");
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO users (id, username, password_hash, display_name, role, active)
+     VALUES (?, ?, ?, ?, 'parent', 1)`
+  )
+    .bind(id, username, await hashPassword(password), displayName)
+    .run();
+
+  return getUser(env, id);
+}
+
+export async function createChildUser(env: Env, input: CreateChildInput) {
+  const username = normalizeUsername(input.username);
+  const displayName = normalizeDisplayName(input.displayName, username);
+  const password = normalizePassword(input.password, true);
+  const id = randomId("user");
+
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
+    .bind(username)
+    .first<{ id: string }>();
+
+  if (existing) {
+    throw new Error("用户名已存在。");
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO users (id, username, password_hash, display_name, role, active)
+     VALUES (?, ?, ?, ?, 'child', 1)`
+  )
+    .bind(id, username, await hashPassword(password), displayName)
+    .run();
+
+  await ensureChildProfile(env, id, displayName);
 
   return getUser(env, id);
 }
