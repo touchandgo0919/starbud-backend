@@ -37,12 +37,14 @@ const defaultChildren = [
   {
     id: "child-zhaoyouning",
     userId: "user-zhaotao",
+    childUserId: "user-zhaoyouning",
     name: "赵佑宁",
     deviceId: "mac-zhaoyouning"
   },
   {
     id: "child-zhaojianing",
     userId: "user-zhaotao",
+    childUserId: "user-zhaojianing",
     name: "赵佳宁",
     deviceId: "mac-zhaojianing"
   }
@@ -77,5 +79,32 @@ export async function ensureDefaultUsers(env: Env) {
     )
       .bind(child.id, child.userId, child.name, child.deviceId)
       .run();
+
+    await env.DB.prepare("UPDATE children SET child_user_id = ? WHERE id = ?")
+      .bind(child.childUserId, child.id)
+      .run();
+  }
+
+  const defaultFamilyResult = await env.DB.prepare(
+    `INSERT OR IGNORE INTO families (id, name, created_by, is_default)
+     VALUES ('family-zhao', '赵家', 'user-zhaotao', 1)`
+  ).run();
+
+  if (defaultFamilyResult.meta.changes > 0) {
+    const defaultFamilyMembers = [
+      ["user-zhaotao", "爸爸"],
+      ["user-wangyamei", "妈妈"],
+      ["user-zhaoyouning", "孩子"],
+      ["user-zhaojianing", "孩子"]
+    ];
+
+    for (const [userId, relationship] of defaultFamilyMembers) {
+      await env.DB.prepare(
+        `INSERT INTO family_members (family_id, user_id, relationship)
+         VALUES ('family-zhao', ?, ?)`
+      )
+        .bind(userId, relationship)
+        .run();
+    }
   }
 }

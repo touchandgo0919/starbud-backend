@@ -56,7 +56,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 }
 
 export async function createTaskForUser(env: Env, user: AuthUser, input: CreateTaskInput) {
-  const childId = resolveTaskChildId(user, input.childId);
+  const childId = await resolveTaskChildId(env, user, input.childId);
 
   if (!childId) {
     throw new Error("Task target is required.");
@@ -92,7 +92,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
 }
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
-  const childId = resolveTaskChildId(user, requestedChildId);
+  const childId = await resolveTaskChildId(env, user, requestedChildId);
 
   if (!childId) {
     return [];
@@ -134,7 +134,34 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     return null;
   }
 
+  if (user.role === "parent" && !(await canAccessChild(env, user, task.childId))) {
+    return null;
+  }
+
   return completeTask(env, taskId);
+}
+
+export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string) {
+  if (user.role !== "parent") {
+    return false;
+  }
+
+  const task = await getTaskById(env, taskId);
+
+  if (!task || !(await canAccessChild(env, user, task.childId))) {
+    return false;
+  }
+
+  const result = await env.DB.prepare(
+    `UPDATE tasks
+     SET active = 0
+     WHERE id = ?
+      AND active = 1`
+  )
+    .bind(taskId)
+    .run();
+
+  return result.meta.changes > 0;
 }
 
 export async function getTaskById(env: Env, taskId: string) {
@@ -157,10 +184,45 @@ export async function getTaskById(env: Env, taskId: string) {
   return row ? toTaskDto(row) : null;
 }
 
-function resolveTaskChildId(user: AuthUser, requestedChildId?: string) {
+async function resolveTaskChildId(env: Env, user: AuthUser, requestedChildId?: string) {
   if (user.role === "child") {
     return childIdForUser(user);
   }
 
-  return requestedChildId || "child-zhaoyouning";
+  if (requestedChildId) {
+    return (await canAccessChild(env, user, requestedChildId)) ? requestedChildId : null;
+  }
+
+  const child = await env.DB.prepare(
+    `SELECT children.id
+     FROM children
+     INNER JOIN family_members child_member
+      ON child_member.user_id = children.child_user_id
+     INNER JOIN family_members parent_member
+      ON parent_member.family_id = child_member.family_id
+     WHERE parent_member.user_id = ?
+     ORDER BY children.name ASC
+     LIMIT 1`
+  )
+    .bind(user.id)
+    .first<{ id: string }>();
+
+  return child?.id || null;
+}
+
+async function canAccessChild(env: Env, user: AuthUser, childId: string) {
+  const child = await env.DB.prepare(
+    `SELECT children.id
+     FROM children
+     INNER JOIN family_members child_member
+      ON child_member.user_id = children.child_user_id
+     INNER JOIN family_members parent_member
+      ON parent_member.family_id = child_member.family_id
+     WHERE children.id = ? AND parent_member.user_id = ?
+     LIMIT 1`
+  )
+    .bind(childId, user.id)
+    .first<{ id: string }>();
+
+  return Boolean(child);
 }

@@ -1,7 +1,12 @@
 import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { getAuthUser } from "../services/auth";
 import { ensureDefaultUsers } from "../db/seed";
-import { completeTaskForUser, createTaskForUser, getTodayTasksForUser } from "../services/tasks";
+import {
+  completeTaskForUser,
+  createTaskForUser,
+  deleteTaskForUser,
+  getTodayTasksForUser
+} from "../services/tasks";
 import type { CreateTaskInput, Env } from "../types";
 
 export async function handleTasks(request: Request, env: Env, url: URL) {
@@ -43,6 +48,18 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
     }
 
     return jsonResponse({ task });
+  }
+
+  const deleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+
+  if (request.method === "DELETE" && deleteMatch) {
+    const deleted = await deleteTaskForUser(env, user, deleteMatch[1]);
+
+    if (!deleted) {
+      return notFound();
+    }
+
+    return jsonResponse({ deleted: true });
   }
 
   return null;

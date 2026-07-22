@@ -30,6 +30,33 @@ export interface ChildDto {
   deviceId: string | null;
 }
 
+export interface FamilyRow {
+  id: string;
+  name: string;
+  created_by: string;
+  is_default: number;
+  created_at: string;
+}
+
+export interface FamilyMemberDto {
+  id: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  relationship: string;
+  isOwner: boolean;
+}
+
+export interface FamilyDto {
+  id: string;
+  name: string;
+  isOwner: boolean;
+  canManage: boolean;
+  canDelete: boolean;
+  members: FamilyMemberDto[];
+  createdAt: string;
+}
+
 export interface TaskRow {
   id: string;
   child_id: string;

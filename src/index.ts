@@ -1,5 +1,6 @@
 import { emptyResponse, jsonResponse, notFound } from "./http";
 import { handleAuth } from "./routes/auth";
+import { handleFamilies } from "./routes/families";
 import { handleTasks } from "./routes/tasks";
 import type { Env } from "./types";
 
@@ -22,6 +23,12 @@ export default {
 
     if (authResponse) {
       return authResponse;
+    }
+
+    const familyResponse = await handleFamilies(request, env, url);
+
+    if (familyResponse) {
+      return familyResponse;
     }
 
     const taskResponse = await handleTasks(request, env, url);

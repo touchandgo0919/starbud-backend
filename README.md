@@ -22,6 +22,10 @@ npm run deploy
 
 ## Cloudflare D1 SQLite
 
+Migration files are maintained in the private parent repository at
+`../migrations/`. Run the migration commands below from this backend directory
+inside the root `starbud-design` checkout.
+
 Create the remote D1 database:
 
 ```bash
@@ -83,6 +87,14 @@ npm run deploy
 - `POST /api/auth/login`
 - `GET /api/me`
 - `GET /api/children`
+- `GET /api/families`
+- `POST /api/families`
+- `PATCH /api/families/:id`
+- `DELETE /api/families/:id` (creator only; the default family is protected)
+- `POST /api/families/:id/members`
+- `PATCH /api/families/:id/members/:userId`
+- `DELETE /api/families/:id/members/:userId`
 - `POST /api/tasks`
 - `GET /api/tasks/today`
 - `POST /api/tasks/:id/complete`
+- `DELETE /api/tasks/:id` (parent only)
