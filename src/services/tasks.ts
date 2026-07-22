@@ -16,6 +16,7 @@ function toTaskDto(row: TaskRow): TaskDto {
     scheduleTime: row.schedule_time,
     repeatType: row.repeat_type,
     voiceEnabled: Boolean(row.voice_enable),
+    voiceContent: row.voice_content?.trim() || row.title,
     status: row.record_status === "completed" ? "completed" : "pending",
     completedAt: row.completed_at,
     createdAt: row.created_at
@@ -26,13 +27,20 @@ export async function createTask(env: Env, input: CreateTaskInput) {
   const demo = await ensureDemoFamily(env);
   const title = input.title?.trim();
   const scheduleTime = input.scheduleTime?.trim();
+  const requestedVoiceContent = input.voiceContent?.trim();
 
   if (!title) {
     throw new Error("Task title is required.");
   }
 
+  const voiceContent = requestedVoiceContent || title;
+
   if (!scheduleTime || !/^\d{2}:\d{2}$/.test(scheduleTime)) {
     throw new Error("scheduleTime must use HH:mm format.");
+  }
+
+  if (voiceContent.length > 120) {
+    throw new Error("Voice reminder content cannot exceed 120 characters.");
   }
 
   const id = randomId("task");
@@ -40,8 +48,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable)
-     VALUES (?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -49,7 +57,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       title,
       scheduleTime,
       input.repeatType || "daily",
-      input.voiceEnabled === false ? 0 : 1
+      input.voiceEnabled === false ? 0 : 1,
+      voiceContent
     )
     .run();
 

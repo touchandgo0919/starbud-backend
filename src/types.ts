@@ -79,6 +79,7 @@ export interface TaskRow {
   schedule_time: string;
   repeat_type: RepeatType;
   voice_enable: number;
+  voice_content: string | null;
   active: number;
   created_at: string;
   record_status: string | null;
@@ -92,6 +93,7 @@ export interface TaskDto {
   scheduleTime: string;
   repeatType: RepeatType;
   voiceEnabled: boolean;
+  voiceContent: string;
   status: "pending" | "completed" | "missed";
   completedAt: string | null;
   createdAt: string;
@@ -103,4 +105,5 @@ export interface CreateTaskInput {
   scheduleTime?: string;
   repeatType?: RepeatType;
   voiceEnabled?: boolean;
+  voiceContent?: string;
 }
