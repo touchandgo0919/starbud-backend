@@ -45,11 +45,15 @@ async function hmacKey(secret: string) {
   );
 }
 
+export function isAuthConfigured(env: Env) {
+  return Boolean(env.JWT_SECRET && env.JWT_SECRET.length >= 32);
+}
+
 function jwtSecret(env: Env) {
-  if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {
+  if (!isAuthConfigured(env)) {
     throw new Error("JWT_SECRET must be configured with at least 32 characters.");
   }
-  return env.JWT_SECRET;
+  return env.JWT_SECRET!;
 }
 
 export async function hashPassword(password: string) {

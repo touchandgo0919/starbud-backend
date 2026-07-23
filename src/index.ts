@@ -3,6 +3,7 @@ import { handleAuth } from "./routes/auth";
 import { handleFamilies } from "./routes/families";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
+import { isAuthConfigured } from "./services/auth";
 import type { Env } from "./types";
 
 export default {
@@ -14,10 +15,14 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
+      const authConfigured = isAuthConfigured(env);
       return jsonResponse({
-        ok: true,
-        service: "starbud-backend"
-      });
+        ok: authConfigured,
+        service: "starbud-backend",
+        checks: {
+          authentication: authConfigured ? "ready" : "not_configured"
+        }
+      }, { status: authConfigured ? 200 : 503 });
     }
 
     const authResponse = await handleAuth(request, env, url);

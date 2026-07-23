@@ -1,11 +1,20 @@
-import { badRequest, jsonResponse, unauthorized } from "../http";
+import { badRequest, jsonResponse, serviceUnavailable, unauthorized } from "../http";
 import { ensureDefaultUsers } from "../db/seed";
-import { getAuthUser, loginUser, signToken } from "../services/auth";
+import { getAuthUser, isAuthConfigured, loginUser, signToken } from "../services/auth";
 import { listChildren } from "../services/children";
 import { registerParent } from "../services/users";
 import type { AuthUser, Env } from "../types";
 
 export async function handleAuth(request: Request, env: Env, url: URL) {
+  if (
+    (request.method === "POST" && url.pathname === "/api/auth/register") ||
+    (request.method === "POST" && url.pathname === "/api/auth/login")
+  ) {
+    if (!isAuthConfigured(env)) {
+      return serviceUnavailable("登录服务尚未配置，请联系管理员。");
+    }
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/register") {
     await ensureDefaultUsers(env);
 

@@ -41,3 +41,7 @@ export function unauthorized(message = "Unauthorized") {
 export function forbidden(message = "Forbidden") {
   return jsonResponse({ error: message }, { status: 403 });
 }
+
+export function serviceUnavailable(message = "Service unavailable") {
+  return jsonResponse({ error: message }, { status: 503 });
+}
