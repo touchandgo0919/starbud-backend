@@ -6,14 +6,12 @@ const defaultUsers: Array<{
   username: string;
   displayName: string;
   role: UserRole;
-  password?: string;
 }> = [
   {
     id: "user-admin",
     username: "admin",
     displayName: "系统管理员",
-    role: "admin",
-    password: "admin@2026"
+    role: "admin"
   },
   {
     id: "user-wangyamei",
@@ -68,20 +66,38 @@ export async function ensureDemoFamily(env: Env) {
 
 export async function ensureDefaultUsers(env: Env) {
   const passwordSuffix = env.INITIAL_PASSWORD_SUFFIX || "@local-dev";
+  const demoUsersEnabled = env.SEED_DEMO_USERS === "true";
+  const usersToSeed = defaultUsers.filter(
+    (user) =>
+      (user.role === "admin" && Boolean(env.ADMIN_INITIAL_PASSWORD)) ||
+      (user.role !== "admin" && demoUsersEnabled)
+  );
 
-  for (const user of defaultUsers) {
+  for (const user of usersToSeed) {
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE id = ? LIMIT 1")
+      .bind(user.id)
+      .first<{ id: string }>();
+
+    if (existing) {
+      continue;
+    }
+
     const password =
       user.role === "admin"
-        ? env.ADMIN_INITIAL_PASSWORD || user.password || "admin@2026"
+        ? env.ADMIN_INITIAL_PASSWORD!
         : `${user.username}${passwordSuffix}`;
     const passwordHash = await hashPassword(password);
 
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO users (id, username, password_hash, display_name, role, active)
+      `INSERT INTO users (id, username, password_hash, display_name, role, active)
        VALUES (?, ?, ?, ?, ?, 1)`
     )
       .bind(user.id, user.username, passwordHash, user.displayName, user.role)
       .run();
+  }
+
+  if (!demoUsersEnabled) {
+    return;
   }
 
   for (const child of defaultChildren) {

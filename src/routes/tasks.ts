@@ -1,4 +1,4 @@
-import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
+import { badRequest, forbidden, jsonResponse, notFound, unauthorized } from "../http";
 import { getAuthUser } from "../services/auth";
 import { ensureDefaultUsers } from "../db/seed";
 import {
@@ -11,6 +11,10 @@ import {
 import type { CreateTaskInput, Env } from "../types";
 
 export async function handleTasks(request: Request, env: Env, url: URL) {
+  if (!url.pathname.startsWith("/api/tasks")) {
+    return null;
+  }
+
   await ensureDefaultUsers(env);
 
   const user = await getAuthUser(request, env);
@@ -36,6 +40,10 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/tasks") {
+    if (user.role === "child") {
+      return forbidden("仅家长或管理员可以创建任务。");
+    }
+
     const input = (await request.json().catch(() => null)) as CreateTaskInput | null;
 
     if (!input) {

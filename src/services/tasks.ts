@@ -1,11 +1,80 @@
 import { randomId } from "../utils";
 import type { AuthUser, CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
-import { ensureDemoFamily } from "../db/seed";
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
 
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+const repeatTypes = new Set(["once", "daily", "weekdays", "weekly"]);
+const weekdayNumbers: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6
+};
+
+function dateParts(env: Env, date = new Date()) {
+  const configuredTimeZone = env.APP_TIME_ZONE || "Asia/Shanghai";
+  let formatter: Intl.DateTimeFormat;
+
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: configuredTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short"
+    });
+  } catch {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short"
+    });
+  }
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map((part) => [part.type, part.value])
+  );
+  return {
+    key: `${parts.year}-${parts.month}-${parts.day}`,
+    weekday: weekdayNumbers[parts.weekday] ?? date.getUTCDay()
+  };
+}
+
+function parseCreatedAt(value: string) {
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value)
+    ? value
+    : `${value.replace(" ", "T")}Z`;
+  return new Date(normalized);
+}
+
+function shouldRunOnDate(
+  env: Env,
+  row: Pick<TaskRow, "repeat_type" | "created_at">,
+  date = new Date()
+) {
+  const today = dateParts(env, date);
+
+  if (row.repeat_type === "daily") {
+    return true;
+  }
+
+  if (row.repeat_type === "weekdays") {
+    return today.weekday >= 1 && today.weekday <= 5;
+  }
+
+  const created = dateParts(env, parseCreatedAt(row.created_at));
+  return row.repeat_type === "weekly"
+    ? created.weekday === today.weekday
+    : created.key === today.key;
+}
+
+function todayKey(env: Env, date = new Date()) {
+  return dateParts(env, date).key;
 }
 
 function toTaskDto(row: TaskRow): TaskDto {
@@ -24,7 +93,6 @@ function toTaskDto(row: TaskRow): TaskDto {
 }
 
 export async function createTask(env: Env, input: CreateTaskInput) {
-  const demo = await ensureDemoFamily(env);
   const title = input.title?.trim();
   const scheduleTime = input.scheduleTime?.trim();
   const requestedVoiceContent = input.voiceContent?.trim();
@@ -33,10 +101,18 @@ export async function createTask(env: Env, input: CreateTaskInput) {
     throw new Error("Task title is required.");
   }
 
+  if (title.length > 40) {
+    throw new Error("Task title cannot exceed 40 characters.");
+  }
+
   const voiceContent = requestedVoiceContent || title;
 
-  if (!scheduleTime || !/^\d{2}:\d{2}$/.test(scheduleTime)) {
+  if (!scheduleTime || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(scheduleTime)) {
     throw new Error("scheduleTime must use HH:mm format.");
+  }
+
+  if (!input.repeatType || !repeatTypes.has(input.repeatType)) {
+    throw new Error("Invalid repeat type.");
   }
 
   if (voiceContent.length > 120) {
@@ -44,7 +120,11 @@ export async function createTask(env: Env, input: CreateTaskInput) {
   }
 
   const id = randomId("task");
-  const childId = input.childId || demo.childId;
+  const childId = input.childId;
+
+  if (!childId) {
+    throw new Error("Task target is required.");
+  }
 
   await env.DB.prepare(
     `INSERT INTO tasks
@@ -56,7 +136,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       childId,
       title,
       scheduleTime,
-      input.repeatType || "daily",
+      input.repeatType,
       input.voiceEnabled === false ? 0 : 1,
       voiceContent
     )
@@ -66,6 +146,10 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 }
 
 export async function createTaskForUser(env: Env, user: AuthUser, input: CreateTaskInput) {
+  if (user.role === "child") {
+    throw new Error("仅家长或管理员可以创建任务。");
+  }
+
   const childId = await resolveTaskChildId(env, user, input.childId);
 
   if (!childId) {
@@ -79,8 +163,11 @@ export async function createTaskForUser(env: Env, user: AuthUser, input: CreateT
 }
 
 export async function getTodayTasks(env: Env, childId?: string) {
-  const demo = await ensureDemoFamily(env);
-  const date = todayKey();
+  if (!childId) {
+    return [];
+  }
+
+  const date = todayKey(env);
 
   const result = await env.DB.prepare(
     `SELECT
@@ -95,10 +182,10 @@ export async function getTodayTasks(env: Env, childId?: string) {
       AND tasks.child_id = ?
      ORDER BY tasks.schedule_time ASC`
   )
-    .bind(date, childId || demo.childId)
+    .bind(date, childId)
     .all<TaskRow>();
 
-  return result.results.map(toTaskDto);
+  return result.results.filter((row) => shouldRunOnDate(env, row)).map(toTaskDto);
 }
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
@@ -134,11 +221,17 @@ export async function listTasksForUser(
 export async function completeTask(env: Env, taskId: string) {
   const existing = await getTaskById(env, taskId);
 
-  if (!existing) {
+  if (
+    !existing ||
+    !shouldRunOnDate(env, {
+      repeat_type: existing.repeatType,
+      created_at: existing.createdAt
+    })
+  ) {
     return null;
   }
 
-  const date = todayKey();
+  const date = todayKey(env);
   const completedAt = new Date().toISOString();
 
   await env.DB.prepare(
@@ -195,7 +288,7 @@ export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string
 }
 
 export async function getTaskById(env: Env, taskId: string) {
-  const date = todayKey();
+  const date = todayKey(env);
   const row = await env.DB.prepare(
     `SELECT
       tasks.*,
@@ -206,6 +299,7 @@ export async function getTaskById(env: Env, taskId: string) {
       ON task_records.task_id = tasks.id
       AND task_records.date = ?
      WHERE tasks.id = ?
+      AND tasks.active = 1
      LIMIT 1`
   )
     .bind(date, taskId)

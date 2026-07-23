@@ -76,11 +76,19 @@ Production should use a custom JWT secret:
 wrangler secret put JWT_SECRET
 ```
 
-Override the seeded administrator password before production deployment:
+`JWT_SECRET` is required and must contain at least 32 characters. The Worker
+fails closed when it is missing or too short.
+
+Create the administrator by setting its initial password before the first
+deployment:
 
 ```bash
 wrangler secret put ADMIN_INITIAL_PASSWORD
 ```
+
+Demo family accounts are disabled by default. Enable them only for local
+development by copying `.dev.vars.example` to `.dev.vars`. Do not enable
+`SEED_DEMO_USERS` in production.
 
 Deploy Worker:
 

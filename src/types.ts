@@ -1,8 +1,10 @@
 export interface Env {
+  APP_TIME_ZONE?: string;
   DB: D1Database;
   ADMIN_INITIAL_PASSWORD?: string;
   INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;
+  SEED_DEMO_USERS?: string;
 }
 
 export type RepeatType = "once" | "daily" | "weekdays" | "weekly";

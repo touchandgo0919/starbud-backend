@@ -1,0 +1,5 @@
+JWT_SECRET=replace-with-at-least-32-random-characters
+ADMIN_INITIAL_PASSWORD=replace-with-a-strong-local-admin-password
+SEED_DEMO_USERS=true
+INITIAL_PASSWORD_SUFFIX=@local-dev
+APP_TIME_ZONE=Asia/Shanghai
