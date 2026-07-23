@@ -96,6 +96,13 @@ Deploy Worker:
 npm run deploy
 ```
 
+`npm run deploy` checks the Worker's encrypted Secret list before deployment.
+When `JWT_SECRET` is missing, it generates a 48-byte random value in a
+permission-restricted temporary file and uploads it with the same Worker
+version. Existing secrets are preserved, so routine deployments do not
+invalidate active sessions. The deployment identity needs permission to read
+and edit Worker secrets.
+
 ## API
 
 - `GET /health`

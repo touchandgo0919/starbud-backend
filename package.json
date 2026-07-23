@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:wrangler": "wrangler deploy",
     "d1:create": "wrangler d1 create starbud",
     "d1:migrate:local": "wrangler d1 migrations apply starbud --local",
     "d1:migrate:remote": "wrangler d1 migrations apply starbud --remote",
