@@ -77,7 +77,7 @@ function todayKey(env: Env, date = new Date()) {
   return dateParts(env, date).key;
 }
 
-function toTaskDto(row: TaskRow): TaskDto {
+function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
   return {
     id: row.id,
     childId: row.child_id,
@@ -87,6 +87,7 @@ function toTaskDto(row: TaskRow): TaskDto {
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
     status: row.record_status === "completed" ? "completed" : "pending",
+    occurrenceDate,
     completedAt: row.completed_at,
     createdAt: row.created_at
   };
@@ -173,6 +174,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
     `SELECT
       tasks.*,
       task_records.status AS record_status,
+      task_records.date AS record_date,
       task_records.completed_at AS completed_at
      FROM tasks
      LEFT JOIN task_records
@@ -185,7 +187,9 @@ export async function getTodayTasks(env: Env, childId?: string) {
     .bind(date, childId)
     .all<TaskRow>();
 
-  return result.results.filter((row) => shouldRunOnDate(env, row)).map(toTaskDto);
+  return result.results
+    .filter((row) => shouldRunOnDate(env, row))
+    .map((row) => toTaskDto(row, date));
 }
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
@@ -207,15 +211,55 @@ export async function listTasksForUser(
   const selectedChildren = filters.childId
     ? children.filter((child) => child.id === filters.childId)
     : children;
-  const groups = await Promise.all(selectedChildren.map((child) => getTodayTasks(env, child.id)));
+  const includePending = !filters.status || filters.status === "pending";
+  const includeCompleted = !filters.status || filters.status === "completed";
+  const pendingGroups = includePending
+    ? await Promise.all(
+        selectedChildren.map(async (child) =>
+          (await getTodayTasks(env, child.id)).filter((task) => task.status === "pending")
+        )
+      )
+    : [];
+  const completedGroups = includeCompleted
+    ? await Promise.all(selectedChildren.map((child) => getCompletedTasks(env, child.id)))
+    : [];
   const keyword = filters.keyword?.trim().toLocaleLowerCase() || "";
 
-  return groups
+  return [...pendingGroups, ...completedGroups]
     .flat()
-    .filter((task) => !filters.status || task.status === filters.status)
     .filter((task) => !filters.repeatType || task.repeatType === filters.repeatType)
     .filter((task) => !keyword || task.title.toLocaleLowerCase().includes(keyword))
-    .sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
+    .sort((left, right) => {
+      if (left.status !== right.status) {
+        return left.status === "pending" ? -1 : 1;
+      }
+      if (left.status === "completed") {
+        return (right.completedAt || right.occurrenceDate || "")
+          .localeCompare(left.completedAt || left.occurrenceDate || "");
+      }
+      return left.scheduleTime.localeCompare(right.scheduleTime);
+    });
+}
+
+async function getCompletedTasks(env: Env, childId: string) {
+  const result = await env.DB.prepare(
+    `SELECT
+      tasks.*,
+      task_records.status AS record_status,
+      task_records.date AS record_date,
+      task_records.completed_at AS completed_at
+     FROM task_records
+     INNER JOIN tasks
+      ON tasks.id = task_records.task_id
+     WHERE tasks.active = 1
+      AND tasks.child_id = ?
+      AND task_records.status = 'completed'
+     ORDER BY task_records.date DESC, task_records.completed_at DESC`
+  )
+    .bind(childId)
+    .all<TaskRow>();
+
+  return result.results.map((row) => toTaskDto(row));
 }
 
 export async function completeTask(env: Env, taskId: string) {
@@ -293,6 +337,7 @@ export async function getTaskById(env: Env, taskId: string) {
     `SELECT
       tasks.*,
       task_records.status AS record_status,
+      task_records.date AS record_date,
       task_records.completed_at AS completed_at
      FROM tasks
      LEFT JOIN task_records

@@ -98,6 +98,7 @@ export interface TaskRow {
   active: number;
   created_at: string;
   record_status: string | null;
+  record_date: string | null;
   completed_at: string | null;
 }
 
@@ -110,6 +111,7 @@ export interface TaskDto {
   voiceEnabled: boolean;
   voiceContent: string;
   status: "pending" | "completed" | "missed";
+  occurrenceDate: string | null;
   completedAt: string | null;
   createdAt: string;
 }
