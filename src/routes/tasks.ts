@@ -31,8 +31,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/tasks") {
-    return jsonResponse({
-      tasks: await listTasksForUser(env, user, {
+    const tasks = await listTasksForUser(env, user, {
         childId: url.searchParams.get("childId") || undefined,
         status: url.searchParams.get("status") || undefined,
         keyword: url.searchParams.get("keyword") || undefined,
@@ -40,7 +39,23 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
         date: url.searchParams.get("date") || undefined,
         dateFrom: url.searchParams.get("dateFrom") || undefined,
         dateTo: url.searchParams.get("dateTo") || undefined
-      })
+      });
+    const page = positiveInteger(url.searchParams.get("page"));
+
+    if (!page) {
+      return jsonResponse({ tasks });
+    }
+
+    const pageSize = Math.min(50, positiveInteger(url.searchParams.get("pageSize")) || 20);
+    const start = (page - 1) * pageSize;
+    return jsonResponse({
+      tasks: tasks.slice(start, start + pageSize),
+      pagination: {
+        page,
+        pageSize,
+        total: tasks.length,
+        hasMore: start + pageSize < tasks.length
+      }
     });
   }
 
@@ -117,4 +132,9 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   return null;
+}
+
+function positiveInteger(value: string | null) {
+  const parsed = Number.parseInt(value || "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

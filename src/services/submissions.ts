@@ -239,16 +239,44 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
   return updated ? submissionDto(env, updated) : null;
 }
 
-export async function listSubmissions(env: Env, user: AuthUser) {
+export async function listSubmissions(
+  env: Env,
+  user: AuthUser,
+  options: { date?: string; keyword?: string; page: number; pageSize: number }
+) {
   const childIds = user.role === "child"
     ? [await childIdForUser(env, user)].filter((childId): childId is string => Boolean(childId))
     : (await listChildren(env, user)).map((child) => child.id);
 
-  if (!childIds.length) {
-    return [];
-  }
+  if (!childIds.length) return { submissions: [], total: 0 };
 
   const childPlaceholders = childIds.map(() => "?").join(", ");
+  const conditions = [
+    `task_submissions.child_id IN (${childPlaceholders})`,
+    "task_submissions.status = 'submitted'"
+  ];
+  const values: Array<string | number> = [...childIds];
+
+  if (options.date) {
+    conditions.push("task_submissions.task_date = ?");
+    values.push(options.date);
+  }
+
+  if (options.keyword) {
+    conditions.push("LOWER(tasks.title) LIKE ?");
+    values.push(`%${options.keyword.trim().toLowerCase()}%`);
+  }
+
+  const where = conditions.join(" AND ");
+  const total = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM task_submissions
+     INNER JOIN tasks ON tasks.id = task_submissions.task_id
+     WHERE ${where}`
+  )
+    .bind(...values)
+    .first<{ count: number }>();
+
   const result = await env.DB.prepare(
     `SELECT
       task_submissions.*,
@@ -257,14 +285,17 @@ export async function listSubmissions(env: Env, user: AuthUser) {
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
-     WHERE task_submissions.child_id IN (${childPlaceholders})
-      AND task_submissions.status = 'submitted'
-     ORDER BY task_submissions.submitted_at DESC`
+     WHERE ${where}
+     ORDER BY task_submissions.submitted_at DESC
+     LIMIT ? OFFSET ?`
   )
-    .bind(...childIds)
+    .bind(...values, options.pageSize, (options.page - 1) * options.pageSize)
     .all<SubmissionRow>();
 
-  return Promise.all(result.results.map((row) => submissionDto(env, row)));
+  return {
+    submissions: await Promise.all(result.results.map((row) => submissionDto(env, row))),
+    total: total?.count || 0
+  };
 }
 
 export async function getSubmissionPhotoObject(

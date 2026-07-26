@@ -47,7 +47,23 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
   try {
     if (request.method === "GET" && url.pathname === "/api/submissions") {
-      return jsonResponse({ submissions: await listSubmissions(env, user) });
+      const page = positiveInteger(url.searchParams.get("page")) || 1;
+      const pageSize = Math.min(50, positiveInteger(url.searchParams.get("pageSize")) || 20);
+      const result = await listSubmissions(env, user, {
+        date: url.searchParams.get("date") || undefined,
+        keyword: url.searchParams.get("keyword") || undefined,
+        page,
+        pageSize
+      });
+      return jsonResponse({
+        submissions: result.submissions,
+        pagination: {
+          page,
+          pageSize,
+          total: result.total,
+          hasMore: page * pageSize < result.total
+        }
+      });
     }
 
     if (request.method === "POST" && createMatch) {
@@ -82,4 +98,9 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   }
 
   return null;
+}
+
+function positiveInteger(value: string | null) {
+  const parsed = Number.parseInt(value || "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
