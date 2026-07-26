@@ -7,7 +7,7 @@ import type {
   SubmissionPhotoRow,
   SubmissionRow
 } from "../types";
-import { childIdForUser } from "./children";
+import { childIdForUser, listChildren } from "./children";
 import { getTodayTasks, todayKey } from "./tasks";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
@@ -240,7 +240,15 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
 }
 
 export async function listSubmissions(env: Env, user: AuthUser) {
-  const childId = await childIdForSubmissionUser(env, user);
+  const childIds = user.role === "child"
+    ? [await childIdForUser(env, user)].filter((childId): childId is string => Boolean(childId))
+    : (await listChildren(env, user)).map((child) => child.id);
+
+  if (!childIds.length) {
+    return [];
+  }
+
+  const childPlaceholders = childIds.map(() => "?").join(", ");
   const result = await env.DB.prepare(
     `SELECT
       task_submissions.*,
@@ -249,11 +257,11 @@ export async function listSubmissions(env: Env, user: AuthUser) {
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
-     WHERE task_submissions.child_id = ?
+     WHERE task_submissions.child_id IN (${childPlaceholders})
       AND task_submissions.status = 'submitted'
      ORDER BY task_submissions.submitted_at DESC`
   )
-    .bind(childId)
+    .bind(...childIds)
     .all<SubmissionRow>();
 
   return Promise.all(result.results.map((row) => submissionDto(env, row)));

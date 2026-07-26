@@ -7,7 +7,8 @@ import {
   createTaskForUser,
   deleteTaskForUser,
   getTodayTasksForUser,
-  listTasksForUser
+  listTasksForUser,
+  updateTaskForUser
 } from "../services/tasks";
 import type { CreateTaskInput, Env } from "../types";
 
@@ -86,6 +87,24 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   const deleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+
+  if (request.method === "PATCH" && deleteMatch) {
+    if (user.role === "child") {
+      return forbidden("仅家长或管理员可以编辑任务。");
+    }
+
+    const input = (await request.json().catch(() => null)) as CreateTaskInput | null;
+    if (!input) {
+      return badRequest("Invalid JSON body.");
+    }
+
+    try {
+      const task = await updateTaskForUser(env, user, deleteMatch[1], input);
+      return task ? jsonResponse({ task }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "Invalid task.");
+    }
+  }
 
   if (request.method === "DELETE" && deleteMatch) {
     const deleted = await deleteTaskForUser(env, user, deleteMatch[1]);

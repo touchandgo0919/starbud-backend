@@ -105,6 +105,35 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
 }
 
 export async function createTask(env: Env, input: CreateTaskInput) {
+  const values = validateTaskInput(input);
+  const id = randomId("task");
+  const childId = input.childId;
+
+  if (!childId) {
+    throw new Error("Task target is required.");
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO tasks
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      id,
+      childId,
+      values.title,
+      values.scheduleTime,
+      values.repeatType,
+      values.voiceEnabled ? 1 : 0,
+      values.voiceContent,
+      values.voiceReminderCount
+    )
+    .run();
+
+  return getTaskById(env, id);
+}
+
+function validateTaskInput(input: CreateTaskInput) {
   const title = input.title?.trim();
   const scheduleTime = input.scheduleTime?.trim();
   const requestedVoiceContent = input.voiceContent?.trim();
@@ -136,31 +165,55 @@ export async function createTask(env: Env, input: CreateTaskInput) {
     throw new Error("Voice reminder count must be between 1 and 3.");
   }
 
-  const id = randomId("task");
-  const childId = input.childId;
+  return {
+    title,
+    scheduleTime,
+    repeatType: input.repeatType,
+    voiceEnabled: input.voiceEnabled !== false,
+    voiceContent,
+    voiceReminderCount
+  };
+}
 
-  if (!childId) {
-    throw new Error("Task target is required.");
+export async function updateTaskForUser(
+  env: Env,
+  user: AuthUser,
+  taskId: string,
+  input: CreateTaskInput
+) {
+  if (user.role !== "parent" && user.role !== "admin") {
+    return null;
   }
 
+  const task = await getTaskById(env, taskId);
+  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) {
+    return null;
+  }
+
+  const values = validateTaskInput(input);
   await env.DB.prepare(
-    `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `UPDATE tasks
+     SET title = ?,
+      schedule_time = ?,
+      repeat_type = ?,
+      voice_enable = ?,
+      voice_content = ?,
+      voice_reminder_count = ?
+     WHERE id = ?
+      AND active = 1`
   )
     .bind(
-      id,
-      childId,
-      title,
-      scheduleTime,
-      input.repeatType,
-      input.voiceEnabled === false ? 0 : 1,
-      voiceContent,
-      voiceReminderCount
+      values.title,
+      values.scheduleTime,
+      values.repeatType,
+      values.voiceEnabled ? 1 : 0,
+      values.voiceContent,
+      values.voiceReminderCount,
+      taskId
     )
     .run();
 
-  return getTaskById(env, id);
+  return getTaskById(env, taskId);
 }
 
 export async function createTaskForUser(env: Env, user: AuthUser, input: CreateTaskInput) {
@@ -226,6 +279,12 @@ export async function getTodayTasks(env: Env, childId?: string) {
 }
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
+  if (user.role !== "child" && !requestedChildId) {
+    const children = await listChildren(env, user);
+    const tasks = await Promise.all(children.map((child) => getTodayTasks(env, child.id)));
+    return tasks.flat().sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
+  }
+
   const childId = await resolveTaskChildId(env, user, requestedChildId);
 
   if (!childId) {
