@@ -1,6 +1,7 @@
 export interface Env {
   APP_TIME_ZONE?: string;
   DB: D1Database;
+  SUBMISSION_FILES: R2Bucket;
   ADMIN_INITIAL_PASSWORD?: string;
   INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;
@@ -101,6 +102,10 @@ export interface TaskRow {
   record_status: string | null;
   record_date: string | null;
   completed_at: string | null;
+  claimed_at: string | null;
+  submission_id: string | null;
+  submission_status: string | null;
+  submission_photo_count: number | null;
 }
 
 export interface TaskDto {
@@ -115,6 +120,10 @@ export interface TaskDto {
   status: "pending" | "completed" | "missed";
   occurrenceDate: string | null;
   completedAt: string | null;
+  claimedAt: string | null;
+  submissionId: string | null;
+  submissionStatus: "draft" | "submitted" | null;
+  submissionPhotoCount: number;
   createdAt: string;
 }
 
@@ -126,4 +135,49 @@ export interface CreateTaskInput {
   voiceEnabled?: boolean;
   voiceContent?: string;
   voiceReminderCount?: number;
+}
+
+export interface SubmissionRow {
+  id: string;
+  task_id: string;
+  child_id: string;
+  task_date: string;
+  note: string;
+  status: "draft" | "submitted";
+  created_at: string;
+  submitted_at: string | null;
+  task_title: string;
+  schedule_time: string;
+}
+
+export interface SubmissionPhotoRow {
+  id: string;
+  submission_id: string;
+  object_key: string;
+  access_token: string;
+  content_type: string;
+  byte_size: number;
+  created_at: string;
+}
+
+export interface SubmissionPhotoDto {
+  id: string;
+  url: string;
+  contentType: string;
+  byteSize: number;
+}
+
+export interface SubmissionDto {
+  id: string;
+  taskId: string;
+  childId: string;
+  taskDate: string;
+  taskTitle: string;
+  scheduleTime: string;
+  note: string;
+  status: "draft" | "submitted";
+  photoCount: number;
+  photos: SubmissionPhotoDto[];
+  createdAt: string;
+  submittedAt: string | null;
 }

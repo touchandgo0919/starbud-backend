@@ -1,6 +1,7 @@
 import { emptyResponse, jsonResponse, notFound } from "./http";
 import { handleAuth } from "./routes/auth";
 import { handleFamilies } from "./routes/families";
+import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
 import { isAuthConfigured } from "./services/auth";
@@ -41,6 +42,12 @@ export default {
 
     if (userResponse) {
       return userResponse;
+    }
+
+    const submissionResponse = await handleSubmissions(request, env, url);
+
+    if (submissionResponse) {
+      return submissionResponse;
     }
 
     const taskResponse = await handleTasks(request, env, url);

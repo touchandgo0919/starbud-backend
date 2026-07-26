@@ -3,6 +3,7 @@ import { getAuthUser } from "../services/auth";
 import { ensureDefaultUsers } from "../db/seed";
 import {
   completeTaskForUser,
+  claimTaskForUser,
   createTaskForUser,
   deleteTaskForUser,
   getTodayTasksForUser,
@@ -34,7 +35,10 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
         childId: url.searchParams.get("childId") || undefined,
         status: url.searchParams.get("status") || undefined,
         keyword: url.searchParams.get("keyword") || undefined,
-        repeatType: url.searchParams.get("repeatType") || undefined
+        repeatType: url.searchParams.get("repeatType") || undefined,
+        date: url.searchParams.get("date") || undefined,
+        dateFrom: url.searchParams.get("dateFrom") || undefined,
+        dateTo: url.searchParams.get("dateTo") || undefined
       })
     });
   }
@@ -68,6 +72,17 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
     }
 
     return jsonResponse({ task });
+  }
+
+  const claimMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/claim$/);
+
+  if (request.method === "POST" && claimMatch) {
+    try {
+      const task = await claimTaskForUser(env, user, claimMatch[1]);
+      return task ? jsonResponse({ task }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "任务领取失败。");
+    }
   }
 
   const deleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);

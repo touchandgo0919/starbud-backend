@@ -58,6 +58,11 @@ function shouldRunOnDate(
   date = new Date()
 ) {
   const today = dateParts(env, date);
+  const created = dateParts(env, parseCreatedAt(row.created_at));
+
+  if (today.key < created.key) {
+    return false;
+  }
 
   if (row.repeat_type === "daily") {
     return true;
@@ -67,13 +72,12 @@ function shouldRunOnDate(
     return today.weekday >= 1 && today.weekday <= 5;
   }
 
-  const created = dateParts(env, parseCreatedAt(row.created_at));
   return row.repeat_type === "weekly"
     ? created.weekday === today.weekday
     : created.key === today.key;
 }
 
-function todayKey(env: Env, date = new Date()) {
+export function todayKey(env: Env, date = new Date()) {
   return dateParts(env, date).key;
 }
 
@@ -90,6 +94,12 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     status: row.record_status === "completed" ? "completed" : "pending",
     occurrenceDate,
     completedAt: row.completed_at,
+    claimedAt: row.claimed_at || null,
+    submissionId: row.submission_id || null,
+    submissionStatus: row.submission_status === "draft" || row.submission_status === "submitted"
+      ? row.submission_status
+      : null,
+    submissionPhotoCount: row.submission_photo_count || 0,
     createdAt: row.created_at
   };
 }
@@ -182,16 +192,32 @@ export async function getTodayTasks(env: Env, childId?: string) {
       tasks.*,
       task_records.status AS record_status,
       task_records.date AS record_date,
-      task_records.completed_at AS completed_at
+      task_records.completed_at AS completed_at,
+      task_claims.claimed_at AS claimed_at,
+      task_submissions.id AS submission_id,
+      task_submissions.status AS submission_status,
+      (
+        SELECT COUNT(*)
+        FROM task_submission_photos
+        WHERE task_submission_photos.submission_id = task_submissions.id
+      ) AS submission_photo_count
      FROM tasks
      LEFT JOIN task_records
       ON task_records.task_id = tasks.id
       AND task_records.date = ?
+     LEFT JOIN task_claims
+      ON task_claims.task_id = tasks.id
+      AND task_claims.child_id = tasks.child_id
+      AND task_claims.task_date = ?
+     LEFT JOIN task_submissions
+      ON task_submissions.task_id = tasks.id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = ?
      WHERE tasks.active = 1
       AND tasks.child_id = ?
      ORDER BY tasks.schedule_time ASC`
   )
-    .bind(date, childId)
+    .bind(date, date, date, childId)
     .all<TaskRow>();
 
   return result.results
@@ -212,12 +238,31 @@ export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedCh
 export async function listTasksForUser(
   env: Env,
   user: AuthUser,
-  filters: { childId?: string; status?: string; keyword?: string; repeatType?: string }
+  filters: {
+    childId?: string;
+    status?: string;
+    keyword?: string;
+    repeatType?: string;
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }
 ) {
   const children = await listChildren(env, user);
   const selectedChildren = filters.childId
     ? children.filter((child) => child.id === filters.childId)
     : children;
+  const requestedRange = resolveRequestedRange(filters);
+
+  if (requestedRange) {
+    const occurrenceGroups = await Promise.all(
+      selectedChildren.map((child) =>
+        getTaskOccurrences(env, child.id, requestedRange.from, requestedRange.to)
+      )
+    );
+    return filterAndSortTasks(occurrenceGroups.flat(), filters);
+  }
+
   const includePending = !filters.status || filters.status === "pending";
   const includeCompleted = !filters.status || filters.status === "completed";
   const pendingGroups = includePending
@@ -230,13 +275,23 @@ export async function listTasksForUser(
   const completedGroups = includeCompleted
     ? await Promise.all(selectedChildren.map((child) => getCompletedTasks(env, child.id)))
     : [];
+  return filterAndSortTasks([...pendingGroups, ...completedGroups].flat(), filters);
+}
+
+function filterAndSortTasks(
+  tasks: TaskDto[],
+  filters: { status?: string; keyword?: string; repeatType?: string }
+) {
   const keyword = filters.keyword?.trim().toLocaleLowerCase() || "";
 
-  return [...pendingGroups, ...completedGroups]
-    .flat()
+  return tasks
+    .filter((task) => !filters.status || task.status === filters.status)
     .filter((task) => !filters.repeatType || task.repeatType === filters.repeatType)
     .filter((task) => !keyword || task.title.toLocaleLowerCase().includes(keyword))
     .sort((left, right) => {
+      if (left.occurrenceDate !== right.occurrenceDate) {
+        return (left.occurrenceDate || "").localeCompare(right.occurrenceDate || "");
+      }
       if (left.status !== right.status) {
         return left.status === "pending" ? -1 : 1;
       }
@@ -248,16 +303,124 @@ export async function listTasksForUser(
     });
 }
 
+function resolveRequestedRange(filters: { date?: string; dateFrom?: string; dateTo?: string }) {
+  if (filters.date) {
+    const date = parseDateKey(filters.date);
+    return date ? { from: filters.date, to: filters.date } : null;
+  }
+
+  if (!filters.dateFrom && !filters.dateTo) {
+    return null;
+  }
+
+  const from = filters.dateFrom && parseDateKey(filters.dateFrom) ? filters.dateFrom : null;
+  const to = filters.dateTo && parseDateKey(filters.dateTo) ? filters.dateTo : null;
+
+  if (!from || !to || from > to) {
+    return null;
+  }
+
+  const dates = dateKeysBetween(from, to);
+  if (dates.length > 62) {
+    return null;
+  }
+
+  return { from, to };
+}
+
+function parseDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const date = new Date(`${value}T12:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
+}
+
+function dateKeysBetween(from: string, to: string) {
+  const start = parseDateKey(from);
+  const end = parseDateKey(to);
+  if (!start || !end) return [];
+
+  const dates: string[] = [];
+  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    dates.push(cursor.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+async function getTaskOccurrences(env: Env, childId: string, from: string, to: string) {
+  const [taskResult, recordResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT
+        tasks.*,
+        NULL AS record_status,
+        NULL AS record_date,
+        NULL AS completed_at
+       FROM tasks
+       WHERE tasks.active = 1
+        AND tasks.child_id = ?`
+    )
+      .bind(childId)
+      .all<TaskRow>(),
+    env.DB.prepare(
+      `SELECT task_records.task_id, task_records.date, task_records.status, task_records.completed_at
+       FROM task_records
+       INNER JOIN tasks ON tasks.id = task_records.task_id
+       WHERE tasks.active = 1
+        AND tasks.child_id = ?
+        AND task_records.date BETWEEN ? AND ?`
+    )
+      .bind(childId, from, to)
+      .all<{ task_id: string; date: string; status: string; completed_at: string | null }>()
+  ]);
+  const records = new Map(
+    recordResult.results.map((record) => [`${record.task_id}:${record.date}`, record])
+  );
+
+  return dateKeysBetween(from, to).flatMap((dateKey) => {
+    const occurrenceDate = parseDateKey(dateKey);
+    if (!occurrenceDate) return [];
+
+    return taskResult.results
+      .filter((row) => shouldRunOnDate(env, row, occurrenceDate))
+      .map((row) => {
+        const record = records.get(`${row.id}:${dateKey}`);
+        return toTaskDto(
+          {
+            ...row,
+            record_status: record?.status || null,
+            record_date: dateKey,
+            completed_at: record?.completed_at || null
+          },
+          dateKey
+        );
+      });
+  });
+}
+
 async function getCompletedTasks(env: Env, childId: string) {
   const result = await env.DB.prepare(
     `SELECT
       tasks.*,
       task_records.status AS record_status,
       task_records.date AS record_date,
-      task_records.completed_at AS completed_at
+      task_records.completed_at AS completed_at,
+      NULL AS claimed_at,
+      task_submissions.id AS submission_id,
+      task_submissions.status AS submission_status,
+      (
+        SELECT COUNT(*)
+        FROM task_submission_photos
+        WHERE task_submission_photos.submission_id = task_submissions.id
+      ) AS submission_photo_count
      FROM task_records
      INNER JOIN tasks
       ON tasks.id = task_records.task_id
+     LEFT JOIN task_submissions
+      ON task_submissions.task_id = tasks.id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = task_records.date
      WHERE tasks.active = 1
       AND tasks.child_id = ?
       AND task_records.status = 'completed'
@@ -315,6 +478,31 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
   return completeTask(env, taskId);
 }
 
+export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string) {
+  if (user.role !== "child") {
+    throw new Error("仅儿童账号可以领取任务。");
+  }
+
+  const childId = await childIdForUser(env, user);
+  if (!childId) {
+    throw new Error("当前儿童账号尚未关联家庭成员。");
+  }
+
+  const task = (await getTodayTasks(env, childId)).find((item) => item.id === taskId);
+  if (!task) {
+    return null;
+  }
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(randomId("claim"), taskId, childId, todayKey(env))
+    .run();
+
+  return getTaskById(env, taskId);
+}
+
 export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string) {
   if (user.role !== "parent" && user.role !== "admin") {
     return false;
@@ -345,16 +533,32 @@ export async function getTaskById(env: Env, taskId: string) {
       tasks.*,
       task_records.status AS record_status,
       task_records.date AS record_date,
-      task_records.completed_at AS completed_at
+      task_records.completed_at AS completed_at,
+      task_claims.claimed_at AS claimed_at,
+      task_submissions.id AS submission_id,
+      task_submissions.status AS submission_status,
+      (
+        SELECT COUNT(*)
+        FROM task_submission_photos
+        WHERE task_submission_photos.submission_id = task_submissions.id
+      ) AS submission_photo_count
      FROM tasks
      LEFT JOIN task_records
       ON task_records.task_id = tasks.id
       AND task_records.date = ?
+     LEFT JOIN task_claims
+      ON task_claims.task_id = tasks.id
+      AND task_claims.child_id = tasks.child_id
+      AND task_claims.task_date = ?
+     LEFT JOIN task_submissions
+      ON task_submissions.task_id = tasks.id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = ?
      WHERE tasks.id = ?
       AND tasks.active = 1
      LIMIT 1`
   )
-    .bind(date, taskId)
+    .bind(date, date, date, taskId)
     .first<TaskRow>();
 
   return row ? toTaskDto(row) : null;
@@ -399,7 +603,7 @@ async function resolveTaskChildId(env: Env, user: AuthUser, requestedChildId?: s
   return child?.id || null;
 }
 
-async function canAccessChild(env: Env, user: AuthUser, childId: string) {
+export async function canAccessChild(env: Env, user: AuthUser, childId: string) {
   const child = await env.DB.prepare(
     `SELECT children.id
      FROM children

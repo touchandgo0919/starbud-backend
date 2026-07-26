@@ -7,6 +7,8 @@ Cloudflare Workers backend for Starbud.
 - Task API
 - D1 database schema
 - Child task records
+- Child task claiming and homework photo submissions
+- Private homework photo storage in Cloudflare R2
 - Device sync endpoint placeholders
 - Durable Objects-ready boundary
 
@@ -52,6 +54,15 @@ Apply migrations to Cloudflare:
 ```bash
 npm run d1:migrate:remote
 ```
+
+Create the R2 bucket used for homework photos before the first deployment:
+
+```bash
+npx wrangler r2 bucket create starbud-submissions
+```
+
+The bucket is private. The API returns opaque, tokenized photo URLs rather than
+exposing a public R2 endpoint.
 
 This creates the base tables and adds the default account columns. Configure the
 initial password suffix as a Cloudflare secret before production use:
@@ -122,7 +133,13 @@ and edit Worker secrets.
 - `GET /api/tasks/today`
 - `GET /api/tasks` (filterable task list)
 - `POST /api/tasks/:id/complete`
+- `POST /api/tasks/:id/claim` (child)
+- `POST /api/tasks/:id/submissions` (child)
 - `DELETE /api/tasks/:id` (parent or admin)
+- `GET /api/submissions` (child submission history)
+- `POST /api/submissions/:id/photos` (multipart field: `photo`)
+- `POST /api/submissions/:id/submit`
+- `GET /api/submission-files/:id?token=...`
 - `GET /api/admin/users` (admin only)
 - `POST /api/admin/users` (admin only)
 - `PATCH /api/admin/users/:id` (admin only)
