@@ -86,6 +86,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     repeatType: row.repeat_type,
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
+    voiceReminderCount: row.voice_reminder_count,
     status: row.record_status === "completed" ? "completed" : "pending",
     occurrenceDate,
     completedAt: row.completed_at,
@@ -97,6 +98,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
   const title = input.title?.trim();
   const scheduleTime = input.scheduleTime?.trim();
   const requestedVoiceContent = input.voiceContent?.trim();
+  const voiceReminderCount = input.voiceReminderCount ?? 1;
 
   if (!title) {
     throw new Error("Task title is required.");
@@ -120,6 +122,10 @@ export async function createTask(env: Env, input: CreateTaskInput) {
     throw new Error("Voice reminder content cannot exceed 120 characters.");
   }
 
+  if (!Number.isInteger(voiceReminderCount) || voiceReminderCount < 1 || voiceReminderCount > 3) {
+    throw new Error("Voice reminder count must be between 1 and 3.");
+  }
+
   const id = randomId("task");
   const childId = input.childId;
 
@@ -129,8 +135,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -139,7 +145,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       scheduleTime,
       input.repeatType,
       input.voiceEnabled === false ? 0 : 1,
-      voiceContent
+      voiceContent,
+      voiceReminderCount
     )
     .run();
 

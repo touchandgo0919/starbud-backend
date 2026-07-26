@@ -95,6 +95,7 @@ export interface TaskRow {
   repeat_type: RepeatType;
   voice_enable: number;
   voice_content: string | null;
+  voice_reminder_count: number;
   active: number;
   created_at: string;
   record_status: string | null;
@@ -110,6 +111,7 @@ export interface TaskDto {
   repeatType: RepeatType;
   voiceEnabled: boolean;
   voiceContent: string;
+  voiceReminderCount: number;
   status: "pending" | "completed" | "missed";
   occurrenceDate: string | null;
   completedAt: string | null;
@@ -123,4 +125,5 @@ export interface CreateTaskInput {
   repeatType?: RepeatType;
   voiceEnabled?: boolean;
   voiceContent?: string;
+  voiceReminderCount?: number;
 }
