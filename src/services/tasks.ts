@@ -350,53 +350,45 @@ function dateKeysBetween(from: string, to: string) {
 }
 
 async function getTaskOccurrences(env: Env, childId: string, from: string, to: string) {
-  const [taskResult, recordResult] = await Promise.all([
-    env.DB.prepare(
-      `SELECT
-        tasks.*,
-        NULL AS record_status,
-        NULL AS record_date,
-        NULL AS completed_at
-       FROM tasks
-       WHERE tasks.active = 1
-        AND tasks.child_id = ?`
-    )
-      .bind(childId)
-      .all<TaskRow>(),
-    env.DB.prepare(
-      `SELECT task_records.task_id, task_records.date, task_records.status, task_records.completed_at
-       FROM task_records
-       INNER JOIN tasks ON tasks.id = task_records.task_id
-       WHERE tasks.active = 1
-        AND tasks.child_id = ?
-        AND task_records.date BETWEEN ? AND ?`
-    )
-      .bind(childId, from, to)
-      .all<{ task_id: string; date: string; status: string; completed_at: string | null }>()
-  ]);
-  const records = new Map(
-    recordResult.results.map((record) => [`${record.task_id}:${record.date}`, record])
-  );
+  const recordResult = await env.DB.prepare(
+    `SELECT
+      tasks.*,
+      task_records.status AS record_status,
+      task_records.date AS record_date,
+      task_records.completed_at AS completed_at,
+      NULL AS claimed_at,
+      task_submissions.id AS submission_id,
+      task_submissions.status AS submission_status,
+      (
+        SELECT COUNT(*)
+        FROM task_submission_photos
+        WHERE task_submission_photos.submission_id = task_submissions.id
+      ) AS submission_photo_count
+     FROM task_records
+     INNER JOIN tasks
+      ON tasks.id = task_records.task_id
+     LEFT JOIN task_submissions
+      ON task_submissions.task_id = tasks.id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = task_records.date
+     WHERE tasks.active = 1
+      AND tasks.child_id = ?
+      AND task_records.date BETWEEN ? AND ?
+     ORDER BY task_records.date ASC, tasks.schedule_time ASC`
+  )
+    .bind(childId, from, to)
+    .all<TaskRow>();
 
-  return dateKeysBetween(from, to).flatMap((dateKey) => {
-    const occurrenceDate = parseDateKey(dateKey);
-    if (!occurrenceDate) return [];
+  const recordedTasks = recordResult.results.map((row) => toTaskDto(row, row.record_date));
+  const today = todayKey(env);
 
-    return taskResult.results
-      .filter((row) => shouldRunOnDate(env, row, occurrenceDate))
-      .map((row) => {
-        const record = records.get(`${row.id}:${dateKey}`);
-        return toTaskDto(
-          {
-            ...row,
-            record_status: record?.status || null,
-            record_date: dateKey,
-            completed_at: record?.completed_at || null
-          },
-          dateKey
-        );
-      });
-  });
+  if (today < from || today > to) {
+    return recordedTasks;
+  }
+
+  const pendingToday = (await getTodayTasks(env, childId))
+    .filter((task) => task.status === "pending");
+  return [...recordedTasks, ...pendingToday];
 }
 
 async function getCompletedTasks(env: Env, childId: string) {
