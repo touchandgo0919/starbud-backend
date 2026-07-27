@@ -9,6 +9,7 @@ import {
   getTodayTasksForUser,
   listTaskDefinitionsForUser,
   listTasksForUser,
+  remindTaskForUser,
   updateTaskForUser
 } from "../services/tasks";
 import type { CreateTaskInput, Env } from "../types";
@@ -83,6 +84,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   const completeMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
+  const remindMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/remind$/);
 
   if (request.method === "POST" && completeMatch) {
     const task = await completeTaskForUser(env, user, completeMatch[1]);
@@ -92,6 +94,15 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
     }
 
     return jsonResponse({ task });
+  }
+
+  if (request.method === "POST" && remindMatch) {
+    try {
+      const task = await remindTaskForUser(env, user, remindMatch[1]);
+      return task ? jsonResponse({ task }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "提醒发送失败。");
+    }
   }
 
   const claimMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/claim$/);

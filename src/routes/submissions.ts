@@ -3,14 +3,20 @@ import { getAuthUser } from "../services/auth";
 import {
   createSubmission,
   finalizeSubmission,
+  getTaskSubmissionForUser,
+  getReviewImageObject,
   getSubmissionPhotoObject,
+  listNotifications,
   listSubmissions,
+  markNotificationRead,
+  submitReview,
   uploadSubmissionPhoto
 } from "../services/submissions";
 import type { Env } from "../types";
 
 export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const photoFileMatch = url.pathname.match(/^\/api\/submission-files\/([^/]+)$/);
+  const reviewFileMatch = url.pathname.match(/^\/api\/review-files\/([^/]+)$/);
 
   if (request.method === "GET" && photoFileMatch) {
     const accessToken = url.searchParams.get("token") || "";
@@ -28,13 +34,37 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     return new Response(result.object.body, { headers });
   }
 
+  if (request.method === "GET" && reviewFileMatch) {
+    const accessToken = url.searchParams.get("token") || "";
+    const result = await getReviewImageObject(env, reviewFileMatch[1], accessToken);
+    if (!result) {
+      return notFound();
+    }
+
+    return new Response(result.object.body, {
+      headers: {
+        "access-control-allow-origin": "*",
+        "cache-control": "private, max-age=3600",
+        "content-type": result.contentType,
+        etag: result.object.httpEtag
+      }
+    });
+  }
+
   const createMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submissions$/);
+  const taskSubmissionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submission$/);
   const uploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/photos$/);
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
+  const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
+  const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
   const handlesPath = url.pathname === "/api/submissions"
+    || url.pathname === "/api/notifications"
     || Boolean(createMatch)
+    || Boolean(taskSubmissionMatch)
     || Boolean(uploadMatch)
-    || Boolean(finalizeMatch);
+    || Boolean(finalizeMatch)
+    || Boolean(reviewMatch)
+    || Boolean(notificationReadMatch);
 
   if (!handlesPath) {
     return null;
@@ -68,6 +98,17 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       });
     }
 
+    if (request.method === "GET" && taskSubmissionMatch) {
+      const date = url.searchParams.get("date") || "";
+      if (!date) return badRequest("缺少任务日期。");
+      const submission = await getTaskSubmissionForUser(env, user, taskSubmissionMatch[1], date);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/notifications") {
+      return jsonResponse({ notifications: await listNotifications(env, user) });
+    }
+
     if (request.method === "POST" && createMatch) {
       const input = (await request.json().catch(() => null)) as { note?: string } | null;
       if (!input) {
@@ -94,6 +135,21 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     if (request.method === "POST" && finalizeMatch) {
       const submission = await finalizeSubmission(env, user, finalizeMatch[1]);
       return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && reviewMatch) {
+      const formData = await request.formData().catch(() => null);
+      const image = formData?.get("image");
+      if (!(image instanceof File)) {
+        return badRequest("请上传批改后的图片。");
+      }
+      const submission = await submitReview(env, user, reviewMatch[1], image);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && notificationReadMatch) {
+      const updated = await markNotificationRead(env, user, notificationReadMatch[1]);
+      return updated ? jsonResponse({ ok: true }) : notFound();
     }
   } catch (error) {
     return badRequest(error instanceof Error ? error.message : "作业提交失败。");

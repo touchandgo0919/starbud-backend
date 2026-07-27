@@ -146,6 +146,12 @@ export interface SubmissionRow {
   status: "draft" | "submitted";
   created_at: string;
   submitted_at: string | null;
+  review_id: string | null;
+  review_object_key: string | null;
+  review_access_token: string | null;
+  review_content_type: string | null;
+  review_byte_size: number | null;
+  reviewed_at: string | null;
   task_title: string;
   schedule_time: string;
 }
@@ -180,4 +186,27 @@ export interface SubmissionDto {
   photos: SubmissionPhotoDto[];
   createdAt: string;
   submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewImageUrl: string | null;
+}
+
+export interface NotificationRow {
+  id: string;
+  recipient_user_id: string;
+  submission_id: string | null;
+  type: string;
+  title: string;
+  content: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationDto {
+  id: string;
+  submissionId: string | null;
+  type: string;
+  title: string;
+  content: string;
+  readAt: string | null;
+  createdAt: string;
 }

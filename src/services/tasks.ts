@@ -451,13 +451,17 @@ function dateKeysBetween(from: string, to: string) {
 }
 
 async function getTaskOccurrences(env: Env, childId: string, from: string, to: string) {
-  const [taskResult, recordResult] = await Promise.all([
+  const [taskResult, recordResult, submissionResult] = await Promise.all([
     env.DB.prepare(
       `SELECT
         tasks.*,
         NULL AS record_status,
         NULL AS record_date,
-        NULL AS completed_at
+        NULL AS completed_at,
+        NULL AS claimed_at,
+        NULL AS submission_id,
+        NULL AS submission_status,
+        NULL AS submission_photo_count
        FROM tasks
        WHERE tasks.active = 1
         AND tasks.child_id = ?`
@@ -471,12 +475,43 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
        WHERE tasks.active = 1
         AND tasks.child_id = ?
         AND task_records.date BETWEEN ? AND ?`
+      )
+      .bind(childId, from, to)
+      .all<{ task_id: string; date: string; status: string; completed_at: string | null }>(),
+    env.DB.prepare(
+      `SELECT
+        task_submissions.id AS submission_id,
+        task_submissions.task_id,
+        task_submissions.task_date,
+        task_submissions.status AS submission_status,
+        (
+          SELECT COUNT(*)
+          FROM task_submission_photos
+          WHERE task_submission_photos.submission_id = task_submissions.id
+        ) AS submission_photo_count
+       FROM task_submissions
+       INNER JOIN tasks ON tasks.id = task_submissions.task_id
+       WHERE tasks.active = 1
+        AND tasks.child_id = ?
+        AND task_submissions.task_date BETWEEN ? AND ?`
     )
       .bind(childId, from, to)
-      .all<{ task_id: string; date: string; status: string; completed_at: string | null }>()
+      .all<{
+        submission_id: string;
+        task_id: string;
+        task_date: string;
+        submission_status: "draft" | "submitted";
+        submission_photo_count: number;
+      }>()
   ]);
   const records = new Map(
     recordResult.results.map((record) => [`${record.task_id}:${record.date}`, record])
+  );
+  const submissions = new Map(
+    submissionResult.results.map((submission) => [
+      `${submission.task_id}:${submission.task_date}`,
+      submission
+    ])
   );
 
   return dateKeysBetween(from, to).flatMap((dateKey) => {
@@ -487,12 +522,16 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
       .filter((row) => shouldRunOnDate(env, row, occurrenceDate))
       .map((row) => {
         const record = records.get(`${row.id}:${dateKey}`);
+        const submission = submissions.get(`${row.id}:${dateKey}`);
         return toTaskDto(
           {
             ...row,
             record_status: record?.status || null,
             record_date: dateKey,
-            completed_at: record?.completed_at || null
+            completed_at: record?.completed_at || null,
+            submission_id: submission?.submission_id || null,
+            submission_status: submission?.submission_status || null,
+            submission_photo_count: submission?.submission_photo_count || null
           },
           dateKey
         );
@@ -577,6 +616,43 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
   }
 
   return completeTask(env, taskId);
+}
+
+export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string) {
+  if (user.role === "child") {
+    throw new Error("仅家长或管理员可以发起提醒。");
+  }
+
+  const task = await getTaskById(env, taskId);
+  if (!task || !task.voiceEnabled) {
+    return null;
+  }
+
+  if (user.role !== "admin") {
+    const children = await listChildren(env, user);
+    if (!children.some((child) => child.id === task.childId)) {
+      return null;
+    }
+  }
+
+  const child = await env.DB.prepare(
+    "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
+  )
+    .bind(task.childId)
+    .first<{ child_user_id: string | null }>();
+  if (!child?.child_user_id) {
+    return null;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO notifications
+     (id, recipient_user_id, type, title, content)
+     VALUES (?, ?, 'voice_reminder', '星星芽AI助手 任务提醒', ?)`
+  )
+    .bind(randomId("notification"), child.child_user_id, task.voiceContent)
+    .run();
+
+  return task;
 }
 
 export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string) {

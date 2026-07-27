@@ -2,6 +2,8 @@ import { randomId } from "../utils";
 import type {
   AuthUser,
   Env,
+  NotificationDto,
+  NotificationRow,
   SubmissionDto,
   SubmissionPhotoDto,
   SubmissionPhotoRow,
@@ -50,7 +52,11 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
     photoCount: photos.length,
     photos: photos.map(photoDto),
     createdAt: row.created_at,
-    submittedAt: row.submitted_at
+    submittedAt: row.submitted_at,
+    reviewedAt: row.reviewed_at,
+    reviewImageUrl: row.review_id && row.review_access_token
+      ? `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`
+      : null
   };
 }
 
@@ -239,6 +245,73 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
   return updated ? submissionDto(env, updated) : null;
 }
 
+export async function submitReview(
+  env: Env,
+  user: AuthUser,
+  submissionId: string,
+  image: File
+) {
+  if (user.role !== "parent" && user.role !== "admin") {
+    throw new Error("仅家长或管理员可以提交批改。");
+  }
+
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission || submission.status !== "submitted") {
+    return null;
+  }
+
+  if (user.role !== "admin") {
+    const children = await listChildren(env, user);
+    if (!children.some((child) => child.id === submission.child_id)) {
+      return null;
+    }
+  }
+
+  if (!allowedPhotoTypes.has(image.type) || image.size > maxPhotoBytes) {
+    throw new Error("批改图片格式或大小不符合要求。");
+  }
+
+  const recipient = await env.DB.prepare(
+    "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
+  )
+    .bind(submission.child_id)
+    .first<{ child_user_id: string | null }>();
+  if (!recipient?.child_user_id) {
+    throw new Error("未找到儿童账号，无法发送通知。");
+  }
+
+  const reviewId = randomId("review");
+  const accessToken = randomId("review-file");
+  const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
+  const reviewedAt = new Date().toISOString();
+
+  await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
+    httpMetadata: { contentType: image.type }
+  });
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE task_submissions
+       SET review_id = ?, review_object_key = ?, review_access_token = ?,
+           review_content_type = ?, review_byte_size = ?, reviewed_at = ?
+       WHERE id = ?`
+    ).bind(reviewId, objectKey, accessToken, image.type, image.size, reviewedAt, submissionId),
+    env.DB.prepare(
+      `INSERT INTO notifications
+       (id, recipient_user_id, submission_id, type, title, content)
+       VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?)`
+    ).bind(
+      randomId("notification"),
+      recipient.child_user_id,
+      submissionId,
+      `你的「${submission.task_title}」已经批改完成，快去看看吧！`
+    )
+  ]);
+
+  const updated = await getSubmissionRow(env, submissionId);
+  return updated ? submissionDto(env, updated) : null;
+}
+
 export async function listSubmissions(
   env: Env,
   user: AuthUser,
@@ -268,11 +341,11 @@ export async function listSubmissions(
     conditions.push("task_submissions.task_date = ?");
     values.push(options.date);
   }
+
   if (options.dateFrom && options.dateTo) {
     conditions.push("task_submissions.task_date BETWEEN ? AND ?");
     values.push(options.dateFrom, options.dateTo);
   }
-
 
   if (options.keyword) {
     conditions.push("LOWER(tasks.title) LIKE ?");
@@ -310,6 +383,51 @@ export async function listSubmissions(
   };
 }
 
+export async function getTaskSubmissionForUser(env: Env, user: AuthUser, taskId: string, taskDate: string) {
+  const row = await env.DB.prepare(
+    `SELECT task_submissions.*, tasks.title AS task_title, tasks.schedule_time AS schedule_time
+     FROM task_submissions INNER JOIN tasks ON tasks.id = task_submissions.task_id
+     WHERE task_submissions.task_id = ? AND task_submissions.task_date = ? LIMIT 1`
+  ).bind(taskId, taskDate).first<SubmissionRow>();
+  if (!row) return null;
+  if (user.role === "child" && await childIdForUser(env, user) !== row.child_id) return null;
+  if (user.role === "parent" && !(await listChildren(env, user)).some((child) => child.id === row.child_id)) return null;
+  return submissionDto(env, row);
+}
+
+export async function listNotifications(env: Env, user: AuthUser) {
+  const result = await env.DB.prepare(
+    `SELECT *
+     FROM notifications
+     WHERE recipient_user_id = ?
+     ORDER BY created_at DESC
+     LIMIT 30`
+  )
+    .bind(user.id)
+    .all<NotificationRow>();
+
+  return result.results.map<NotificationDto>((row) => ({
+    id: row.id,
+    submissionId: row.submission_id,
+    type: row.type,
+    title: row.title,
+    content: row.content,
+    readAt: row.read_at,
+    createdAt: row.created_at
+  }));
+}
+
+export async function markNotificationRead(env: Env, user: AuthUser, notificationId: string) {
+  const result = await env.DB.prepare(
+    `UPDATE notifications
+     SET read_at = COALESCE(read_at, ?)
+     WHERE id = ? AND recipient_user_id = ?`
+  )
+    .bind(new Date().toISOString(), notificationId, user.id)
+    .run();
+  return result.meta.changes > 0;
+}
+
 export async function getSubmissionPhotoObject(
   env: Env,
   photoId: string,
@@ -330,4 +448,21 @@ export async function getSubmissionPhotoObject(
 
   const object = await env.SUBMISSION_FILES.get(photo.object_key);
   return object ? { object, photo } : null;
+}
+
+export async function getReviewImageObject(env: Env, reviewId: string, accessToken: string) {
+  const submission = await env.DB.prepare(
+    `SELECT review_object_key, review_content_type
+     FROM task_submissions
+     WHERE review_id = ? AND review_access_token = ?
+     LIMIT 1`
+  )
+    .bind(reviewId, accessToken)
+    .first<{ review_object_key: string | null; review_content_type: string | null }>();
+
+  if (!submission?.review_object_key) {
+    return null;
+  }
+  const object = await env.SUBMISSION_FILES.get(submission.review_object_key);
+  return object ? { object, contentType: submission.review_content_type || "image/png" } : null;
 }
