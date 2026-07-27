@@ -6,6 +6,7 @@ import {
   claimTaskForUser,
   createTaskForUser,
   deleteTaskForUser,
+  getTaskForUser,
   getTodayTasksForUser,
   listTaskDefinitionsForUser,
   listTasksForUser,
@@ -117,6 +118,11 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   const deleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+
+  if (request.method === "GET" && deleteMatch) {
+    const task = await getTaskForUser(env, user, deleteMatch[1]);
+    return task ? jsonResponse({ task }) : notFound();
+  }
 
   if (request.method === "PATCH" && deleteMatch) {
     if (user.role === "child") {

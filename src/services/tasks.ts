@@ -768,6 +768,16 @@ export async function getTaskById(env: Env, taskId: string) {
 
   return row ? toTaskDto(row) : null;
 }
+export async function getTaskForUser(env: Env, user: AuthUser, taskId: string) {
+  const task = await getTaskById(env, taskId);
+  if (!task || user.role === "admin") return task;
+
+  if (user.role === "child") {
+    return (await childIdForUser(env, user)) === task.childId ? task : null;
+  }
+
+  return (await canAccessChild(env, user, task.childId)) ? task : null;
+}
 
 async function resolveTaskChildId(env: Env, user: AuthUser, requestedChildId?: string) {
   if (user.role === "child") {
