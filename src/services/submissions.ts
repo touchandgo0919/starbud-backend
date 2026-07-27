@@ -504,7 +504,32 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission || submission.child_id !== childId || submission.status !== "submitted" || !submission.reviewed_at) return null;
 
+  // 兼容轮次表上线前的旧提交：儿童第一次重新提交时，先固化旧的原图、批改图与备注。
+  // 后续批改由 submitReview 自动按 MAX(sequence) + 1 追加新的轮次。
+  const existingRound = await env.DB.prepare(
+    "SELECT id FROM submission_review_rounds WHERE submission_id = ? LIMIT 1"
+  ).bind(submissionId).first<{ id: string }>();
+  const photos = await getSubmissionPhotos(env, submissionId);
+  const legacyRoundStatement = !existingRound && submission.review_id && submission.review_object_key
+    && submission.review_access_token && submission.review_content_type
+    ? env.DB.prepare(
+      `INSERT INTO submission_review_rounds
+       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, reviewed_at)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      randomId("round"),
+      submissionId,
+      submission.note,
+      JSON.stringify(photos),
+      submission.review_object_key,
+      submission.review_access_token,
+      submission.review_content_type,
+      submission.reviewed_at
+    )
+    : null;
+
   await env.DB.batch([
+    ...(legacyRoundStatement ? [legacyRoundStatement] : []),
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare(
@@ -522,7 +547,7 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
 export async function finalizeSubmissionReview(env: Env, user: AuthUser, submissionId: string) {
   if (user.role !== "parent" && user.role !== "admin") return null;
   const submission = await getSubmissionRow(env, submissionId);
-  if (!submission || !submission.reviewed_at) return null;
+  if (!submission) return null;
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) return null;
   await env.DB.prepare(
     "UPDATE task_submissions SET finalized_at = ? WHERE id = ?"
