@@ -51,6 +51,8 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       const pageSize = Math.min(50, positiveInteger(url.searchParams.get("pageSize")) || 20);
       const result = await listSubmissions(env, user, {
         date: url.searchParams.get("date") || undefined,
+        dateFrom: url.searchParams.get("dateFrom") || undefined,
+        dateTo: url.searchParams.get("dateTo") || undefined,
         keyword: url.searchParams.get("keyword") || undefined,
         page,
         pageSize

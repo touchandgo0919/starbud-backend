@@ -242,7 +242,14 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
 export async function listSubmissions(
   env: Env,
   user: AuthUser,
-  options: { date?: string; keyword?: string; page: number; pageSize: number }
+  options: {
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    keyword?: string;
+    page: number;
+    pageSize: number;
+  }
 ) {
   const childIds = user.role === "child"
     ? [await childIdForUser(env, user)].filter((childId): childId is string => Boolean(childId))
@@ -261,6 +268,11 @@ export async function listSubmissions(
     conditions.push("task_submissions.task_date = ?");
     values.push(options.date);
   }
+  if (options.dateFrom && options.dateTo) {
+    conditions.push("task_submissions.task_date BETWEEN ? AND ?");
+    values.push(options.dateFrom, options.dateTo);
+  }
+
 
   if (options.keyword) {
     conditions.push("LOWER(tasks.title) LIKE ?");
