@@ -3,9 +3,12 @@ import { getAuthUser } from "../services/auth";
 import {
   createSubmission,
   deleteSubmission,
+  finalizeSubmissionReview,
   finalizeSubmission,
   getTaskSubmissionForUser,
   getReviewImageObject,
+  getReviewRoundImageObject,
+  getReviewRoundPhotoObject,
   getSubmissionPhotoObject,
   listNotifications,
   listSubmissions,
@@ -20,6 +23,8 @@ import type { Env } from "../types";
 export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const photoFileMatch = url.pathname.match(/^\/api\/submission-files\/([^/]+)$/);
   const reviewFileMatch = url.pathname.match(/^\/api\/review-files\/([^/]+)$/);
+  const reviewRoundFileMatch = url.pathname.match(/^\/api\/review-round-files\/([^/]+)$/);
+  const reviewRoundPhotoMatch = url.pathname.match(/^\/api\/review-round-photos\/([^/]+)\/(\d+)$/);
 
   if (request.method === "GET" && photoFileMatch) {
     const accessToken = url.searchParams.get("token") || "";
@@ -54,12 +59,25 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     });
   }
 
+  if (request.method === "GET" && reviewRoundFileMatch) {
+    const result = await getReviewRoundImageObject(env, reviewRoundFileMatch[1], url.searchParams.get("token") || "");
+    if (!result) return notFound();
+    return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
+  }
+
+  if (request.method === "GET" && reviewRoundPhotoMatch) {
+    const result = await getReviewRoundPhotoObject(env, reviewRoundPhotoMatch[1], Number(reviewRoundPhotoMatch[2]), url.searchParams.get("token") || "");
+    if (!result) return notFound();
+    return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
+  }
+
   const createMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submissions$/);
   const taskSubmissionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submission$/);
   const uploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/photos$/);
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
   const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
   const resubmitMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/resubmit$/);
+  const finalizeReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/finalize-review$/);
   const deleteSubmissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
   const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
   const handlesPath = url.pathname === "/api/submissions"
@@ -70,6 +88,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(finalizeMatch)
     || Boolean(reviewMatch)
     || Boolean(resubmitMatch)
+    || Boolean(finalizeReviewMatch)
     || Boolean(deleteSubmissionMatch)
     || Boolean(notificationReadMatch);
 
@@ -156,6 +175,11 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
     if (request.method === "POST" && resubmitMatch) {
       const submission = await reopenSubmissionForResubmit(env, user, resubmitMatch[1]);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && finalizeReviewMatch) {
+      const submission = await finalizeSubmissionReview(env, user, finalizeReviewMatch[1]);
       return submission ? jsonResponse({ submission }) : notFound();
     }
 

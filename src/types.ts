@@ -106,6 +106,7 @@ export interface TaskRow {
   submission_id: string | null;
   submission_status: string | null;
   reviewed_at: string | null;
+  finalized_at: string | null;
   submission_photo_count: number | null;
 }
 
@@ -125,6 +126,8 @@ export interface TaskDto {
   submissionId: string | null;
   submissionStatus: "draft" | "submitted" | null;
   reviewedAt: string | null;
+  finalizedAt: string | null;
+  needsRevision: boolean;
   submissionPhotoCount: number;
   createdAt: string;
 }
@@ -154,6 +157,7 @@ export interface SubmissionRow {
   review_content_type: string | null;
   review_byte_size: number | null;
   reviewed_at: string | null;
+  finalized_at: string | null;
   task_title: string;
   schedule_time: string;
 }
@@ -175,6 +179,15 @@ export interface SubmissionPhotoDto {
   byteSize: number;
 }
 
+export interface SubmissionReviewRoundDto {
+  id: string;
+  sequence: number;
+  note: string;
+  photos: SubmissionPhotoDto[];
+  reviewImageUrl: string;
+  reviewedAt: string;
+}
+
 export interface SubmissionDto {
   id: string;
   taskId: string;
@@ -189,7 +202,9 @@ export interface SubmissionDto {
   createdAt: string;
   submittedAt: string | null;
   reviewedAt: string | null;
+  finalizedAt: string | null;
   reviewImageUrl: string | null;
+  reviewRounds: SubmissionReviewRoundDto[];
 }
 
 export interface NotificationRow {

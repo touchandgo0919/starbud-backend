@@ -100,6 +100,8 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
       ? row.submission_status
       : null,
     reviewedAt: row.reviewed_at || null,
+    finalizedAt: row.finalized_at || null,
+    needsRevision: Boolean(row.reviewed_at && !row.finalized_at),
     submissionPhotoCount: row.submission_photo_count || 0,
     createdAt: row.created_at
   };
@@ -251,6 +253,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
       task_submissions.reviewed_at AS reviewed_at,
+      task_submissions.finalized_at AS finalized_at,
       (
         SELECT COUNT(*)
         FROM task_submission_photos
@@ -355,6 +358,7 @@ export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
       task_submissions.reviewed_at AS reviewed_at,
+      task_submissions.finalized_at AS finalized_at,
       (
         SELECT COUNT(*)
         FROM task_submission_photos
@@ -465,6 +469,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
         NULL AS submission_id,
         NULL AS submission_status,
         NULL AS reviewed_at,
+        NULL AS finalized_at,
         NULL AS submission_photo_count
        FROM tasks
        WHERE tasks.active = 1
@@ -489,6 +494,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
         task_submissions.task_date,
         task_submissions.status AS submission_status,
         task_submissions.reviewed_at AS reviewed_at,
+        task_submissions.finalized_at AS finalized_at,
         (
           SELECT COUNT(*)
           FROM task_submission_photos
@@ -507,6 +513,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
         task_date: string;
         submission_status: "draft" | "submitted";
         reviewed_at: string | null;
+        finalized_at: string | null;
         submission_photo_count: number;
       }>(),
     env.DB.prepare(
@@ -553,6 +560,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
             submission_id: submission?.submission_id || null,
             submission_status: submission?.submission_status || null,
             reviewed_at: submission?.reviewed_at || null,
+            finalized_at: submission?.finalized_at || null,
             submission_photo_count: submission?.submission_photo_count || null
           },
           dateKey
@@ -572,6 +580,7 @@ async function getCompletedTasks(env: Env, childId: string) {
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
       task_submissions.reviewed_at AS reviewed_at,
+      task_submissions.finalized_at AS finalized_at,
       (
         SELECT COUNT(*)
         FROM task_submission_photos
@@ -742,6 +751,7 @@ export async function getTaskById(env: Env, taskId: string) {
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
       task_submissions.reviewed_at AS reviewed_at,
+      task_submissions.finalized_at AS finalized_at,
       (
         SELECT COUNT(*)
         FROM task_submission_photos

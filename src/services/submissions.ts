@@ -7,6 +7,7 @@ import type {
   SubmissionDto,
   SubmissionPhotoDto,
   SubmissionPhotoRow,
+  SubmissionReviewRoundDto,
   SubmissionRow
 } from "../types";
 import { childIdForUser, listChildren } from "./children";
@@ -38,8 +39,60 @@ async function getSubmissionPhotos(env: Env, submissionId: string) {
   return result.results;
 }
 
+interface ReviewRoundRow {
+  id: string;
+  submission_id: string;
+  sequence: number;
+  note: string;
+  photos_json: string;
+  review_object_key: string;
+  review_access_token: string;
+  review_content_type: string;
+  reviewed_at: string;
+}
+
+function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
+  const photos = JSON.parse(round.photos_json) as SubmissionPhotoRow[];
+  return photos.map((photo, index) => ({
+    id: photo.id,
+    url: `/api/review-round-photos/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}`,
+    contentType: photo.content_type,
+    byteSize: photo.byte_size
+  }));
+}
+
+async function getSubmissionReviewRounds(env: Env, submissionId: string): Promise<SubmissionReviewRoundDto[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM submission_review_rounds
+     WHERE submission_id = ?
+     ORDER BY sequence ASC`
+  ).bind(submissionId).all<ReviewRoundRow>();
+
+  return result.results.map((round) => ({
+    id: round.id,
+    sequence: round.sequence,
+    note: round.note,
+    photos: reviewRoundPhotos(round),
+    reviewImageUrl: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
+    reviewedAt: round.reviewed_at
+  }));
+}
+
 async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDto> {
   const photos = await getSubmissionPhotos(env, row.id);
+  const savedReviewRounds = await getSubmissionReviewRounds(env, row.id);
+  // 0009 迁移前的批改仅保存了最后一张批改图。将其转换为首轮记录，
+  // 让历史任务也能使用统一的分组详情布局。
+  const reviewRounds = savedReviewRounds.length || !row.review_id || !row.review_access_token
+    ? savedReviewRounds
+    : [{
+      id: `legacy-${row.id}`,
+      sequence: 1,
+      note: row.note,
+      photos: photos.map(photoDto),
+      reviewImageUrl: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
+      reviewedAt: row.reviewed_at || row.submitted_at || row.created_at
+    }];
   return {
     id: row.id,
     taskId: row.task_id,
@@ -54,9 +107,11 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
     reviewedAt: row.reviewed_at,
+    finalizedAt: row.finalized_at,
     reviewImageUrl: row.review_id && row.review_access_token
       ? `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`
-      : null
+      : null,
+    reviewRounds
   };
 }
 
@@ -280,11 +335,13 @@ export async function submitReview(
     throw new Error("未找到儿童账号，无法发送通知。");
   }
 
-  // 每次批改覆盖同一个对象，不保留历史批改版本。
-  const reviewId = submission.review_id || randomId("review");
-  const accessToken = submission.review_access_token || randomId("review-file");
-  const objectKey = `reviews/${submission.child_id}/${submissionId}/latest`;
+  const reviewId = randomId("review");
+  const accessToken = randomId("review-file");
+  const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
   const reviewedAt = new Date().toISOString();
+  const photos = await getSubmissionPhotos(env, submissionId);
+  const round = await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_rounds WHERE submission_id = ?")
+    .bind(submissionId).first<{ sequence: number }>();
 
   await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
     httpMetadata: { contentType: image.type }
@@ -298,6 +355,11 @@ export async function submitReview(
        WHERE id = ?`
     ).bind(reviewId, objectKey, accessToken, image.type, image.size, reviewedAt, submissionId),
     env.DB.prepare(
+      `INSERT INTO submission_review_rounds
+       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(randomId("round"), submissionId, round?.sequence || 1, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, reviewedAt),
+    env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content)
        VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?)`
@@ -308,15 +370,6 @@ export async function submitReview(
       `你的「${submission.task_title}」已经批改完成，快去看看吧！`
     )
   ]);
-
-  // 清理旧实现留下的历史对象，确保每份提交只保留最新的一张批改图。
-  const reviewPrefix = `reviews/${submission.child_id}/${submissionId}/`;
-  const existingReviews = await env.SUBMISSION_FILES.list({ prefix: reviewPrefix });
-  await Promise.all(
-    existingReviews.objects
-      .filter((object) => object.key !== objectKey)
-      .map((object) => env.SUBMISSION_FILES.delete(object.key))
-  );
 
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -406,16 +459,30 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
   }
 
   const photos = await getSubmissionPhotos(env, submissionId);
+  const reviewRounds = await env.DB.prepare(
+    "SELECT * FROM submission_review_rounds WHERE submission_id = ?"
+  ).bind(submissionId).all<ReviewRoundRow>();
   await env.DB.batch([
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM submission_review_rounds WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submissions WHERE id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(submission.task_id, submission.task_date)
   ]);
 
   await Promise.all([
     ...photos.map((photo) => env.SUBMISSION_FILES.delete(photo.object_key)),
-    ...(submission.review_object_key ? [env.SUBMISSION_FILES.delete(submission.review_object_key)] : [])
+    ...reviewRounds.results.flatMap((round) => {
+      try {
+        return (JSON.parse(round.photos_json) as SubmissionPhotoRow[]).map((photo) => env.SUBMISSION_FILES.delete(photo.object_key));
+      } catch {
+        return [];
+      }
+    }),
+    ...reviewRounds.results.map((round) => env.SUBMISSION_FILES.delete(round.review_object_key)),
+    ...(submission.review_object_key && !reviewRounds.results.some((round) => round.review_object_key === submission.review_object_key)
+      ? [env.SUBMISSION_FILES.delete(submission.review_object_key)]
+      : [])
   ]);
   return true;
 }
@@ -437,7 +504,6 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission || submission.child_id !== childId || submission.status !== "submitted" || !submission.reviewed_at) return null;
 
-  const photos = await getSubmissionPhotos(env, submissionId);
   await env.DB.batch([
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
@@ -445,14 +511,22 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
       `UPDATE task_submissions
        SET status = 'draft', note = '', submitted_at = NULL,
            review_id = NULL, review_object_key = NULL, review_access_token = NULL,
-           review_content_type = NULL, review_byte_size = NULL, reviewed_at = NULL
+           review_content_type = NULL, review_byte_size = NULL, reviewed_at = NULL, finalized_at = NULL
        WHERE id = ?`
     ).bind(submissionId)
   ]);
-  await Promise.all([
-    ...photos.map((photo) => env.SUBMISSION_FILES.delete(photo.object_key)),
-    ...(submission.review_object_key ? [env.SUBMISSION_FILES.delete(submission.review_object_key)] : [])
-  ]);
+  const updated = await getSubmissionRow(env, submissionId);
+  return updated ? submissionDto(env, updated) : null;
+}
+
+export async function finalizeSubmissionReview(env: Env, user: AuthUser, submissionId: string) {
+  if (user.role !== "parent" && user.role !== "admin") return null;
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission || !submission.reviewed_at) return null;
+  if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) return null;
+  await env.DB.prepare(
+    "UPDATE task_submissions SET finalized_at = ? WHERE id = ?"
+  ).bind(new Date().toISOString(), submissionId).run();
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }
@@ -539,4 +613,29 @@ export async function getReviewImageObject(env: Env, reviewId: string, accessTok
   }
   const object = await env.SUBMISSION_FILES.get(submission.review_object_key);
   return object ? { object, contentType: submission.review_content_type || "image/png" } : null;
+}
+
+async function getReviewRound(env: Env, roundId: string, accessToken: string) {
+  return env.DB.prepare(
+    `SELECT * FROM submission_review_rounds
+     WHERE id = ? AND review_access_token = ?
+     LIMIT 1`
+  ).bind(roundId, accessToken).first<ReviewRoundRow>();
+}
+
+export async function getReviewRoundImageObject(env: Env, roundId: string, accessToken: string) {
+  const round = await getReviewRound(env, roundId, accessToken);
+  if (!round) return null;
+  const object = await env.SUBMISSION_FILES.get(round.review_object_key);
+  return object ? { object, contentType: round.review_content_type || "image/png" } : null;
+}
+
+export async function getReviewRoundPhotoObject(env: Env, roundId: string, photoIndex: number, accessToken: string) {
+  const round = await getReviewRound(env, roundId, accessToken);
+  if (!round) return null;
+  const photo = JSON.parse(round.photos_json) as SubmissionPhotoRow[];
+  const selected = photo[photoIndex];
+  if (!selected) return null;
+  const object = await env.SUBMISSION_FILES.get(selected.object_key);
+  return object ? { object, contentType: selected.content_type || "image/jpeg" } : null;
 }
