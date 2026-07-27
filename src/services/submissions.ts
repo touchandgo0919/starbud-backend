@@ -483,6 +483,7 @@ export async function updateSubmissionNote(env: Env, user: AuthUser, submissionI
   const childId = await childIdForSubmissionUser(env, user);
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission || submission.child_id !== childId) return null;
+  if (submission.finalized_at) throw new Error("任务已完成，备注不可编辑。");
 
   const note = noteValue.trim();
   if (note.length > 500) throw new Error("提交备注不能超过 500 个字。");
