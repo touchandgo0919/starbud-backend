@@ -280,9 +280,10 @@ export async function submitReview(
     throw new Error("未找到儿童账号，无法发送通知。");
   }
 
-  const reviewId = randomId("review");
-  const accessToken = randomId("review-file");
-  const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
+  // 每次批改覆盖同一个对象，不保留历史批改版本。
+  const reviewId = submission.review_id || randomId("review");
+  const accessToken = submission.review_access_token || randomId("review-file");
+  const objectKey = `reviews/${submission.child_id}/${submissionId}/latest`;
   const reviewedAt = new Date().toISOString();
 
   await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
@@ -307,6 +308,15 @@ export async function submitReview(
       `你的「${submission.task_title}」已经批改完成，快去看看吧！`
     )
   ]);
+
+  // 清理旧实现留下的历史对象，确保每份提交只保留最新的一张批改图。
+  const reviewPrefix = `reviews/${submission.child_id}/${submissionId}/`;
+  const existingReviews = await env.SUBMISSION_FILES.list({ prefix: reviewPrefix });
+  await Promise.all(
+    existingReviews.objects
+      .filter((object) => object.key !== objectKey)
+      .map((object) => env.SUBMISSION_FILES.delete(object.key))
+  );
 
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
