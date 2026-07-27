@@ -7,6 +7,7 @@ import {
   createTaskForUser,
   deleteTaskForUser,
   getTodayTasksForUser,
+  listTaskDefinitionsForUser,
   listTasksForUser,
   updateTaskForUser
 } from "../services/tasks";
@@ -31,7 +32,10 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/tasks") {
-    const tasks = await listTasksForUser(env, user, {
+    const scope = url.searchParams.get("scope");
+    const tasks = scope === "definitions"
+      ? await listTaskDefinitionsForUser(env, user)
+      : await listTasksForUser(env, user, {
         childId: url.searchParams.get("childId") || undefined,
         status: url.searchParams.get("status") || undefined,
         keyword: url.searchParams.get("keyword") || undefined,

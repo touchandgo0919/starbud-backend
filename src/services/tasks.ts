@@ -337,6 +337,48 @@ export async function listTasksForUser(
   return filterAndSortTasks([...pendingGroups, ...completedGroups].flat(), filters);
 }
 
+export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
+  const children = await listChildren(env, user);
+  if (!children.length) return [];
+
+  const date = todayKey(env);
+  const childPlaceholders = children.map(() => "?").join(", ");
+  const result = await env.DB.prepare(
+    `SELECT
+      tasks.*,
+      task_records.status AS record_status,
+      task_records.date AS record_date,
+      task_records.completed_at AS completed_at,
+      task_claims.claimed_at AS claimed_at,
+      task_submissions.id AS submission_id,
+      task_submissions.status AS submission_status,
+      (
+        SELECT COUNT(*)
+        FROM task_submission_photos
+        WHERE task_submission_photos.submission_id = task_submissions.id
+      ) AS submission_photo_count
+     FROM tasks
+     LEFT JOIN task_records
+      ON task_records.task_id = tasks.id
+      AND task_records.date = ?
+     LEFT JOIN task_claims
+      ON task_claims.task_id = tasks.id
+      AND task_claims.child_id = tasks.child_id
+      AND task_claims.task_date = ?
+     LEFT JOIN task_submissions
+      ON task_submissions.task_id = tasks.id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = ?
+     WHERE tasks.active = 1
+      AND tasks.child_id IN (${childPlaceholders})
+     ORDER BY tasks.created_at DESC, tasks.schedule_time ASC`
+  )
+    .bind(date, date, date, ...children.map((child) => child.id))
+    .all<TaskRow>();
+
+  return result.results.map((row) => toTaskDto(row, null));
+}
+
 function filterAndSortTasks(
   tasks: TaskDto[],
   filters: { status?: string; keyword?: string; repeatType?: string }
