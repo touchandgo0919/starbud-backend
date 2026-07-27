@@ -82,6 +82,7 @@ export function todayKey(env: Env, date = new Date()) {
 }
 
 function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
+  const awaitingParentClose = row.submission_status === "submitted" && !row.finalized_at;
   return {
     id: row.id,
     childId: row.child_id,
@@ -91,9 +92,9 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
     voiceReminderCount: row.voice_reminder_count,
-    status: row.record_status === "completed" ? "completed" : "pending",
+    status: !awaitingParentClose && row.record_status === "completed" ? "completed" : "pending",
     occurrenceDate,
-    completedAt: row.completed_at,
+    completedAt: awaitingParentClose ? null : row.completed_at,
     claimedAt: row.claimed_at || null,
     submissionId: row.submission_id || null,
     submissionStatus: row.submission_status === "draft" || row.submission_status === "submitted"
@@ -600,6 +601,7 @@ async function getCompletedTasks(env: Env, childId: string) {
      WHERE tasks.active = 1
       AND tasks.child_id = ?
       AND task_records.status = 'completed'
+      AND (task_submissions.id IS NULL OR task_submissions.finalized_at IS NOT NULL)
      ORDER BY task_records.date DESC, task_records.completed_at DESC`
   )
     .bind(childId)

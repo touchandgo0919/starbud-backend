@@ -282,19 +282,11 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
   }
 
   const submittedAt = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE task_submissions
-       SET status = 'submitted', submitted_at = ?
-       WHERE id = ? AND status = 'draft'`
-    ).bind(submittedAt, submissionId),
-    env.DB.prepare(
-      `INSERT INTO task_records (id, task_id, date, status, completed_at)
-       VALUES (?, ?, ?, 'completed', ?)
-       ON CONFLICT(task_id, date)
-       DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
-    ).bind(randomId("record"), submission.task_id, submission.task_date, submittedAt)
-  ]);
+  await env.DB.prepare(
+    `UPDATE task_submissions
+     SET status = 'submitted', submitted_at = ?
+     WHERE id = ? AND status = 'draft'`
+  ).bind(submittedAt, submissionId).run();
 
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -549,9 +541,16 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission) return null;
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) return null;
-  await env.DB.prepare(
-    "UPDATE task_submissions SET finalized_at = ? WHERE id = ?"
-  ).bind(new Date().toISOString(), submissionId).run();
+  const closedAt = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?").bind(closedAt, submissionId),
+    env.DB.prepare(
+      `INSERT INTO task_records (id, task_id, date, status, completed_at)
+       VALUES (?, ?, ?, 'completed', ?)
+       ON CONFLICT(task_id, date)
+       DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
+    ).bind(randomId("record"), submission.task_id, submission.task_date, closedAt)
+  ]);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }
