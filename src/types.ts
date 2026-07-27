@@ -105,6 +105,7 @@ export interface TaskRow {
   claimed_at: string | null;
   submission_id: string | null;
   submission_status: string | null;
+  reviewed_at: string | null;
   submission_photo_count: number | null;
 }
 
@@ -123,6 +124,7 @@ export interface TaskDto {
   claimedAt: string | null;
   submissionId: string | null;
   submissionStatus: "draft" | "submitted" | null;
+  reviewedAt: string | null;
   submissionPhotoCount: number;
   createdAt: string;
 }
