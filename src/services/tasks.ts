@@ -451,7 +451,7 @@ function dateKeysBetween(from: string, to: string) {
 }
 
 async function getTaskOccurrences(env: Env, childId: string, from: string, to: string) {
-  const [taskResult, recordResult, submissionResult] = await Promise.all([
+  const [taskResult, recordResult, submissionResult, claimResult] = await Promise.all([
     env.DB.prepare(
       `SELECT
         tasks.*,
@@ -502,7 +502,17 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
         task_date: string;
         submission_status: "draft" | "submitted";
         submission_photo_count: number;
-      }>()
+      }>(),
+    env.DB.prepare(
+      `SELECT task_claims.task_id, task_claims.task_date, task_claims.claimed_at
+       FROM task_claims
+       INNER JOIN tasks ON tasks.id = task_claims.task_id
+       WHERE tasks.active = 1
+        AND tasks.child_id = ?
+        AND task_claims.task_date BETWEEN ? AND ?`
+    )
+      .bind(childId, from, to)
+      .all<{ task_id: string; task_date: string; claimed_at: string | null }>()
   ]);
   const records = new Map(
     recordResult.results.map((record) => [`${record.task_id}:${record.date}`, record])
@@ -512,6 +522,9 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
       `${submission.task_id}:${submission.task_date}`,
       submission
     ])
+  );
+  const claims = new Map(
+    claimResult.results.map((claim) => [`${claim.task_id}:${claim.task_date}`, claim])
   );
 
   return dateKeysBetween(from, to).flatMap((dateKey) => {
@@ -523,12 +536,14 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
       .map((row) => {
         const record = records.get(`${row.id}:${dateKey}`);
         const submission = submissions.get(`${row.id}:${dateKey}`);
+        const claim = claims.get(`${row.id}:${dateKey}`);
         return toTaskDto(
           {
             ...row,
             record_status: record?.status || null,
             record_date: dateKey,
             completed_at: record?.completed_at || null,
+            claimed_at: claim?.claimed_at || null,
             submission_id: submission?.submission_id || null,
             submission_status: submission?.submission_status || null,
             submission_photo_count: submission?.submission_photo_count || null
@@ -546,7 +561,7 @@ async function getCompletedTasks(env: Env, childId: string) {
       task_records.status AS record_status,
       task_records.date AS record_date,
       task_records.completed_at AS completed_at,
-      NULL AS claimed_at,
+      task_claims.claimed_at AS claimed_at,
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
       (
@@ -557,6 +572,10 @@ async function getCompletedTasks(env: Env, childId: string) {
      FROM task_records
      INNER JOIN tasks
       ON tasks.id = task_records.task_id
+     LEFT JOIN task_claims
+      ON task_claims.task_id = tasks.id
+      AND task_claims.child_id = tasks.child_id
+      AND task_claims.task_date = task_records.date
      LEFT JOIN task_submissions
       ON task_submissions.task_id = tasks.id
       AND task_submissions.child_id = tasks.child_id
