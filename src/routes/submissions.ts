@@ -2,6 +2,7 @@ import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { getAuthUser } from "../services/auth";
 import {
   createSubmission,
+  deleteSubmission,
   finalizeSubmission,
   getTaskSubmissionForUser,
   getReviewImageObject,
@@ -9,7 +10,9 @@ import {
   listNotifications,
   listSubmissions,
   markNotificationRead,
+  reopenSubmissionForResubmit,
   submitReview,
+  updateSubmissionNote,
   uploadSubmissionPhoto
 } from "../services/submissions";
 import type { Env } from "../types";
@@ -56,6 +59,8 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const uploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/photos$/);
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
   const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
+  const resubmitMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/resubmit$/);
+  const deleteSubmissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
   const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
   const handlesPath = url.pathname === "/api/submissions"
     || url.pathname === "/api/notifications"
@@ -64,6 +69,8 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(uploadMatch)
     || Boolean(finalizeMatch)
     || Boolean(reviewMatch)
+    || Boolean(resubmitMatch)
+    || Boolean(deleteSubmissionMatch)
     || Boolean(notificationReadMatch);
 
   if (!handlesPath) {
@@ -144,6 +151,23 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
         return badRequest("请上传批改后的图片。");
       }
       const submission = await submitReview(env, user, reviewMatch[1], image);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && resubmitMatch) {
+      const submission = await reopenSubmissionForResubmit(env, user, resubmitMatch[1]);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "DELETE" && deleteSubmissionMatch) {
+      const deleted = await deleteSubmission(env, user, deleteSubmissionMatch[1]);
+      return deleted ? jsonResponse({ deleted: true }) : notFound();
+    }
+
+    if (request.method === "PATCH" && deleteSubmissionMatch) {
+      const input = (await request.json().catch(() => null)) as { note?: string } | null;
+      if (!input || typeof input.note !== "string") return badRequest("请填写提交备注。");
+      const submission = await updateSubmissionNote(env, user, deleteSubmissionMatch[1], input.note);
       return submission ? jsonResponse({ submission }) : notFound();
     }
 

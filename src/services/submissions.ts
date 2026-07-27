@@ -393,6 +393,70 @@ export async function listSubmissions(
   };
 }
 
+export async function deleteSubmission(env: Env, user: AuthUser, submissionId: string) {
+  if (user.role === "child") {
+    throw new Error("仅家长或管理员可以删除提交。");
+  }
+
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission) return false;
+  if (user.role !== "admin") {
+    const children = await listChildren(env, user);
+    if (!children.some((child) => child.id === submission.child_id)) return false;
+  }
+
+  const photos = await getSubmissionPhotos(env, submissionId);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_submissions WHERE id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(submission.task_id, submission.task_date)
+  ]);
+
+  await Promise.all([
+    ...photos.map((photo) => env.SUBMISSION_FILES.delete(photo.object_key)),
+    ...(submission.review_object_key ? [env.SUBMISSION_FILES.delete(submission.review_object_key)] : [])
+  ]);
+  return true;
+}
+
+export async function updateSubmissionNote(env: Env, user: AuthUser, submissionId: string, noteValue: string) {
+  const childId = await childIdForSubmissionUser(env, user);
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission || submission.child_id !== childId) return null;
+
+  const note = noteValue.trim();
+  if (note.length > 500) throw new Error("提交备注不能超过 500 个字。");
+  await env.DB.prepare("UPDATE task_submissions SET note = ? WHERE id = ?").bind(note, submissionId).run();
+  const updated = await getSubmissionRow(env, submissionId);
+  return updated ? submissionDto(env, updated) : null;
+}
+
+export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, submissionId: string) {
+  const childId = await childIdForSubmissionUser(env, user);
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission || submission.child_id !== childId || submission.status !== "submitted" || !submission.reviewed_at) return null;
+
+  const photos = await getSubmissionPhotos(env, submissionId);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare(
+      `UPDATE task_submissions
+       SET status = 'draft', note = '', submitted_at = NULL,
+           review_id = NULL, review_object_key = NULL, review_access_token = NULL,
+           review_content_type = NULL, review_byte_size = NULL, reviewed_at = NULL
+       WHERE id = ?`
+    ).bind(submissionId)
+  ]);
+  await Promise.all([
+    ...photos.map((photo) => env.SUBMISSION_FILES.delete(photo.object_key)),
+    ...(submission.review_object_key ? [env.SUBMISSION_FILES.delete(submission.review_object_key)] : [])
+  ]);
+  const updated = await getSubmissionRow(env, submissionId);
+  return updated ? submissionDto(env, updated) : null;
+}
+
 export async function getTaskSubmissionForUser(env: Env, user: AuthUser, taskId: string, taskDate: string) {
   const row = await env.DB.prepare(
     `SELECT task_submissions.*, tasks.title AS task_title, tasks.schedule_time AS schedule_time
