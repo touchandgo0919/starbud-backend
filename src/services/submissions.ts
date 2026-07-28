@@ -15,7 +15,7 @@ import { getTodayTasks, todayKey } from "./tasks";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const maxPhotoBytes = 10 * 1024 * 1024;
-const maxPhotoCount = 6;
+const maxPhotoCount = 8;
 
 function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
   return {
@@ -227,7 +227,7 @@ export async function uploadSubmissionPhoto(
     .first<{ count: number }>();
 
   if ((photoCount?.count || 0) >= maxPhotoCount) {
-    throw new Error("每次最多上传 6 张照片。");
+    throw new Error("每次最多上传 8 张照片。");
   }
 
   const id = randomId("photo");
