@@ -51,6 +51,17 @@ interface ReviewRoundRow {
   reviewed_at: string;
 }
 
+interface ReviewRoundImageRow {
+  id: string;
+  review_round_id: string;
+  sequence: number;
+  object_key: string;
+  access_token: string;
+  content_type: string;
+  byte_size: number;
+  created_at: string;
+}
+
 function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
   const photos = JSON.parse(round.photos_json) as SubmissionPhotoRow[];
   return photos.map((photo, index) => ({
@@ -61,6 +72,28 @@ function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
   }));
 }
 
+async function reviewRoundImages(env: Env, round: ReviewRoundRow): Promise<SubmissionPhotoDto[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM submission_review_images
+     WHERE review_round_id = ?
+     ORDER BY sequence ASC`
+  ).bind(round.id).all<ReviewRoundImageRow>();
+  if (!result.results.length) {
+    return [{
+      id: `legacy-${round.id}`,
+      url: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
+      contentType: round.review_content_type,
+      byteSize: 0
+    }];
+  }
+  return result.results.map((image) => ({
+    id: image.id,
+    url: `/api/review-round-images/${image.id}?token=${encodeURIComponent(image.access_token)}`,
+    contentType: image.content_type,
+    byteSize: image.byte_size
+  }));
+}
+
 async function getSubmissionReviewRounds(env: Env, submissionId: string): Promise<SubmissionReviewRoundDto[]> {
   const result = await env.DB.prepare(
     `SELECT * FROM submission_review_rounds
@@ -68,14 +101,15 @@ async function getSubmissionReviewRounds(env: Env, submissionId: string): Promis
      ORDER BY sequence ASC`
   ).bind(submissionId).all<ReviewRoundRow>();
 
-  return result.results.map((round) => ({
+  return Promise.all(result.results.map(async (round) => ({
     id: round.id,
     sequence: round.sequence,
     note: round.note,
     photos: reviewRoundPhotos(round),
+    reviewImages: await reviewRoundImages(env, round),
     reviewImageUrl: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
     reviewedAt: round.reviewed_at
-  }));
+  })));
 }
 
 async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDto> {
@@ -90,6 +124,12 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
       sequence: 1,
       note: row.note,
       photos: photos.map(photoDto),
+      reviewImages: [{
+        id: `legacy-${row.id}`,
+        url: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
+        contentType: row.review_content_type || "image/png",
+        byteSize: 0
+      }],
       reviewImageUrl: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
       reviewedAt: row.reviewed_at || row.submitted_at || row.created_at
     }];
@@ -332,8 +372,23 @@ export async function submitReview(
   const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
   const reviewedAt = new Date().toISOString();
   const photos = await getSubmissionPhotos(env, submissionId);
-  const round = await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_rounds WHERE submission_id = ?")
-    .bind(submissionId).first<{ sequence: number }>();
+  const currentRound = submission.review_id
+    ? await env.DB.prepare(
+      `SELECT * FROM submission_review_rounds
+       WHERE submission_id = ?
+       ORDER BY sequence DESC
+       LIMIT 1`
+    ).bind(submissionId).first<ReviewRoundRow>()
+    : null;
+  const nextSequence = currentRound
+    ? currentRound.sequence
+    : (await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_rounds WHERE submission_id = ?")
+      .bind(submissionId).first<{ sequence: number }>())?.sequence || 1;
+  const imageSequence = currentRound
+    ? (await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_images WHERE review_round_id = ?")
+      .bind(currentRound.id).first<{ sequence: number }>())?.sequence || 1
+    : 1;
+  const roundId = currentRound?.id || randomId("round");
 
   await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
     httpMetadata: { contentType: image.type }
@@ -346,12 +401,17 @@ export async function submitReview(
            review_content_type = ?, review_byte_size = ?, reviewed_at = ?
        WHERE id = ?`
     ).bind(reviewId, objectKey, accessToken, image.type, image.size, reviewedAt, submissionId),
-    env.DB.prepare(
+    ...(currentRound ? [] : [env.DB.prepare(
       `INSERT INTO submission_review_rounds
        (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, reviewed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(randomId("round"), submissionId, round?.sequence || 1, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, reviewedAt),
+    ).bind(roundId, submissionId, nextSequence, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, reviewedAt)]),
     env.DB.prepare(
+      `INSERT INTO submission_review_images
+       (id, review_round_id, sequence, object_key, access_token, content_type, byte_size)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(reviewId, roundId, imageSequence, objectKey, accessToken, image.type, image.size),
+    ...(currentRound ? [] : [env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content)
        VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?)`
@@ -360,7 +420,7 @@ export async function submitReview(
       recipient.child_user_id,
       submissionId,
       `你的「${submission.task_title}」已经批改完成，快去看看吧！`
-    )
+    )])
   ]);
 
   const updated = await getSubmissionRow(env, submissionId);
@@ -454,6 +514,13 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
   const reviewRounds = await env.DB.prepare(
     "SELECT * FROM submission_review_rounds WHERE submission_id = ?"
   ).bind(submissionId).all<ReviewRoundRow>();
+  const reviewImages = await env.DB.prepare(
+    `SELECT submission_review_images.*
+     FROM submission_review_images
+     INNER JOIN submission_review_rounds
+       ON submission_review_rounds.id = submission_review_images.review_round_id
+     WHERE submission_review_rounds.submission_id = ?`
+  ).bind(submissionId).all<ReviewRoundImageRow>();
   await env.DB.batch([
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
@@ -472,6 +539,7 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
       }
     }),
     ...reviewRounds.results.map((round) => env.SUBMISSION_FILES.delete(round.review_object_key)),
+    ...reviewImages.results.map((image) => env.SUBMISSION_FILES.delete(image.object_key)),
     ...(submission.review_object_key && !reviewRounds.results.some((round) => round.review_object_key === submission.review_object_key)
       ? [env.SUBMISSION_FILES.delete(submission.review_object_key)]
       : [])
@@ -653,6 +721,17 @@ export async function getReviewRoundImageObject(env: Env, roundId: string, acces
   if (!round) return null;
   const object = await env.SUBMISSION_FILES.get(round.review_object_key);
   return object ? { object, contentType: round.review_content_type || "image/png" } : null;
+}
+
+export async function getReviewRoundResultImageObject(env: Env, imageId: string, accessToken: string) {
+  const image = await env.DB.prepare(
+    `SELECT * FROM submission_review_images
+     WHERE id = ? AND access_token = ?
+     LIMIT 1`
+  ).bind(imageId, accessToken).first<ReviewRoundImageRow>();
+  if (!image) return null;
+  const object = await env.SUBMISSION_FILES.get(image.object_key);
+  return object ? { object, contentType: image.content_type || "image/png" } : null;
 }
 
 export async function getReviewRoundPhotoObject(env: Env, roundId: string, photoIndex: number, accessToken: string) {

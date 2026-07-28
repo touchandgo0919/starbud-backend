@@ -184,6 +184,7 @@ export interface SubmissionReviewRoundDto {
   sequence: number;
   note: string;
   photos: SubmissionPhotoDto[];
+  reviewImages: SubmissionPhotoDto[];
   reviewImageUrl: string;
   reviewedAt: string;
 }
