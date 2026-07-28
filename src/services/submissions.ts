@@ -343,8 +343,9 @@ export async function submitReview(
   }
 
   const submission = await getSubmissionRow(env, submissionId);
-  if (!submission || submission.status !== "submitted") {
-    return null;
+  if (!submission) return null;
+  if (submission.status !== "submitted") {
+    throw new Error("小朋友尚未提交作业，暂不能批改。");
   }
 
   if (user.role !== "admin") {
