@@ -82,7 +82,15 @@ export function todayKey(env: Env, date = new Date()) {
 }
 
 function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
-  const awaitingParentClose = row.submission_status === "submitted" && !row.finalized_at;
+  // A re-submission always starts a new review cycle. Ignore any legacy review
+  // or closure timestamp that predates the current submission.
+  const hasCurrentReview = Boolean(
+    row.reviewed_at && (!row.submitted_at || row.reviewed_at >= row.submitted_at)
+  );
+  const hasCurrentFinalization = Boolean(
+    row.finalized_at && (!row.submitted_at || row.finalized_at >= row.submitted_at)
+  );
+  const awaitingParentClose = row.submission_status === "submitted" && !hasCurrentFinalization;
   return {
     id: row.id,
     childId: row.child_id,
@@ -101,9 +109,9 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     submissionStatus: row.submission_status === "draft" || row.submission_status === "submitted"
       ? row.submission_status
       : null,
-    reviewedAt: row.reviewed_at || null,
-    finalizedAt: row.finalized_at || null,
-    needsRevision: Boolean(row.reviewed_at && !row.finalized_at),
+    reviewedAt: hasCurrentReview ? row.reviewed_at : null,
+    finalizedAt: hasCurrentFinalization ? row.finalized_at : null,
+    needsRevision: hasCurrentReview && !hasCurrentFinalization,
     submissionPhotoCount: row.submission_photo_count || 0,
     createdAt: row.created_at
   };
@@ -263,6 +271,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
       task_claims.claimed_at AS claimed_at,
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
+      task_submissions.submitted_at AS submitted_at,
       task_submissions.reviewed_at AS reviewed_at,
       task_submissions.finalized_at AS finalized_at,
       (
@@ -373,6 +382,7 @@ export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
       task_claims.claimed_at AS claimed_at,
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
+      task_submissions.submitted_at AS submitted_at,
       task_submissions.reviewed_at AS reviewed_at,
       task_submissions.finalized_at AS finalized_at,
       (
@@ -595,6 +605,7 @@ async function getCompletedTasks(env: Env, childId: string) {
       task_claims.claimed_at AS claimed_at,
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
+      task_submissions.submitted_at AS submitted_at,
       task_submissions.reviewed_at AS reviewed_at,
       task_submissions.finalized_at AS finalized_at,
       (
@@ -774,6 +785,7 @@ export async function getTaskById(env: Env, taskId: string, date = todayKey(env)
       task_claims.claimed_at AS claimed_at,
       task_submissions.id AS submission_id,
       task_submissions.status AS submission_status,
+      task_submissions.submitted_at AS submitted_at,
       task_submissions.reviewed_at AS reviewed_at,
       task_submissions.finalized_at AS finalized_at,
       (

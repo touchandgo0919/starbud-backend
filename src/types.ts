@@ -106,6 +106,7 @@ export interface TaskRow {
   claimed_at: string | null;
   submission_id: string | null;
   submission_status: string | null;
+  submitted_at: string | null;
   reviewed_at: string | null;
   finalized_at: string | null;
   submission_photo_count: number | null;
