@@ -10,6 +10,8 @@ export interface Env {
 
 export type RepeatType = "once" | "daily" | "weekdays" | "weekly";
 
+export type TaskReviewStatus = "not_required" | "pending_submission" | "submitting" | "pending_review" | "needs_revision" | "completed";
+
 export type UserRole = "admin" | "parent" | "child";
 
 export interface UserRow {
@@ -132,6 +134,7 @@ export interface TaskDto {
   reviewedAt: string | null;
   finalizedAt: string | null;
   needsRevision: boolean;
+  reviewStatus: TaskReviewStatus;
   submissionPhotoCount: number;
   createdAt: string;
 }

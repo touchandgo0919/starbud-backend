@@ -91,6 +91,19 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     row.finalized_at && (!row.submitted_at || row.finalized_at >= row.submitted_at)
   );
   const awaitingParentClose = row.submission_status === "submitted" && !hasCurrentFinalization;
+  const requiresPhotoUpload = Boolean(row.require_photo_upload);
+  const taskStatus = !awaitingParentClose && row.record_status === "completed" ? "completed" : "pending";
+  const reviewStatus = !requiresPhotoUpload
+    ? (taskStatus === "completed" ? "completed" : "not_required")
+    : hasCurrentFinalization
+      ? "completed"
+      : hasCurrentReview
+        ? "needs_revision"
+        : row.submission_status === "submitted"
+          ? "pending_review"
+          : row.submission_status === "draft" && (row.submission_photo_count || 0) > 0
+            ? "submitting"
+            : "pending_submission";
   return {
     id: row.id,
     childId: row.child_id,
@@ -100,8 +113,8 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
     voiceReminderCount: row.voice_reminder_count,
-    requiresPhotoUpload: Boolean(row.require_photo_upload),
-    status: !awaitingParentClose && row.record_status === "completed" ? "completed" : "pending",
+    requiresPhotoUpload,
+    status: taskStatus,
     occurrenceDate,
     completedAt: awaitingParentClose ? null : row.completed_at,
     claimedAt: row.claimed_at || null,
@@ -112,6 +125,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     reviewedAt: hasCurrentReview ? row.reviewed_at : null,
     finalizedAt: hasCurrentFinalization ? row.finalized_at : null,
     needsRevision: hasCurrentReview && !hasCurrentFinalization,
+    reviewStatus,
     submissionPhotoCount: row.submission_photo_count || 0,
     createdAt: row.created_at
   };
