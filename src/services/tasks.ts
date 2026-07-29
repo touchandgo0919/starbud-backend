@@ -108,6 +108,11 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
   };
 }
 
+function withChildNames(tasks: TaskDto[], children: Array<{ id: string; name: string }>) {
+  const names = new Map(children.map((child) => [child.id, child.name]));
+  return tasks.map((task) => ({ ...task, childName: names.get(task.childId) || "" }));
+}
+
 export async function createTask(env: Env, input: CreateTaskInput) {
   const values = validateTaskInput(input);
   const id = randomId("task");
@@ -285,10 +290,15 @@ export async function getTodayTasks(env: Env, childId?: string) {
 }
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
-  if (user.role !== "child" && !requestedChildId) {
+  if (user.role !== "child") {
     const children = await listChildren(env, user);
-    const tasks = await Promise.all(children.map((child) => getTodayTasks(env, child.id)));
-    return tasks.flat().sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
+    if (!requestedChildId) {
+      const tasks = await Promise.all(children.map((child) => getTodayTasks(env, child.id)));
+      return withChildNames(tasks.flat(), children).sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
+    }
+
+    const child = children.find((item) => item.id === requestedChildId);
+    return child ? withChildNames(await getTodayTasks(env, child.id), [child]) : [];
   }
 
   const childId = await resolveTaskChildId(env, user, requestedChildId);
@@ -325,7 +335,7 @@ export async function listTasksForUser(
         getTaskOccurrences(env, child.id, requestedRange.from, requestedRange.to)
       )
     );
-    return filterAndSortTasks(occurrenceGroups.flat(), filters);
+    return filterAndSortTasks(withChildNames(occurrenceGroups.flat(), selectedChildren), filters);
   }
 
   const includePending = !filters.status || filters.status === "pending";
@@ -340,7 +350,7 @@ export async function listTasksForUser(
   const completedGroups = includeCompleted
     ? await Promise.all(selectedChildren.map((child) => getCompletedTasks(env, child.id)))
     : [];
-  return filterAndSortTasks([...pendingGroups, ...completedGroups].flat(), filters);
+  return filterAndSortTasks(withChildNames([...pendingGroups, ...completedGroups].flat(), selectedChildren), filters);
 }
 
 export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
@@ -384,7 +394,7 @@ export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
     .bind(date, date, date, ...children.map((child) => child.id))
     .all<TaskRow>();
 
-  return result.results.map((row) => toTaskDto(row, null));
+  return withChildNames(result.results.map((row) => toTaskDto(row, null)), children);
 }
 
 function filterAndSortTasks(

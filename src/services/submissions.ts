@@ -137,6 +137,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
     id: row.id,
     taskId: row.task_id,
     childId: row.child_id,
+    childName: row.child_name || "",
     taskDate: row.task_date,
     taskTitle: row.task_title,
     scheduleTime: row.schedule_time,
@@ -160,10 +161,13 @@ async function getSubmissionRow(env: Env, submissionId: string) {
     `SELECT
       task_submissions.*,
       tasks.title AS task_title,
-      tasks.schedule_time AS schedule_time
+      tasks.schedule_time AS schedule_time,
+      children.name AS child_name
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
+     INNER JOIN children
+      ON children.id = task_submissions.child_id
      WHERE task_submissions.id = ?
      LIMIT 1`
   )
@@ -482,10 +486,13 @@ export async function listSubmissions(
     `SELECT
       task_submissions.*,
       tasks.title AS task_title,
-      tasks.schedule_time AS schedule_time
+      tasks.schedule_time AS schedule_time,
+      children.name AS child_name
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
+     INNER JOIN children
+      ON children.id = task_submissions.child_id
      WHERE ${where}
      ORDER BY task_submissions.submitted_at DESC
      LIMIT ? OFFSET ?`

@@ -113,6 +113,7 @@ export interface TaskRow {
 export interface TaskDto {
   id: string;
   childId: string;
+  childName?: string;
   title: string;
   scheduleTime: string;
   repeatType: RepeatType;
@@ -160,6 +161,7 @@ export interface SubmissionRow {
   finalized_at: string | null;
   task_title: string;
   schedule_time: string;
+  child_name?: string | null;
 }
 
 export interface SubmissionPhotoRow {
@@ -193,6 +195,7 @@ export interface SubmissionDto {
   id: string;
   taskId: string;
   childId: string;
+  childName?: string;
   taskDate: string;
   taskTitle: string;
   scheduleTime: string;
