@@ -162,6 +162,7 @@ async function getSubmissionRow(env: Env, submissionId: string) {
       task_submissions.*,
       tasks.title AS task_title,
       tasks.schedule_time AS schedule_time,
+      tasks.require_photo_upload AS require_photo_upload,
       children.name AS child_name
      FROM task_submissions
      INNER JOIN tasks
@@ -204,6 +205,9 @@ export async function createSubmission(
   const task = (await getTodayTasks(env, childId)).find((item) => item.id === taskId);
   if (!task) {
     return null;
+  }
+  if (!task.requiresPhotoUpload) {
+    throw new Error("该任务无需上传照片，领取后请等待家长确认。");
   }
 
   const id = randomId("submission");
@@ -253,6 +257,9 @@ export async function uploadSubmissionPhoto(
 
   if (!submission || submission.child_id !== childId) {
     return null;
+  }
+  if (!submission.require_photo_upload) {
+    throw new Error("该任务无需上传照片，领取后请等待家长确认。");
   }
   if (submission.status !== "draft") {
     throw new Error("作业已经提交，不能继续添加照片。");
@@ -310,6 +317,9 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
 
   if (!submission || submission.child_id !== childId) {
     return null;
+  }
+  if (!submission.require_photo_upload) {
+    throw new Error("该任务无需上传照片，不能提交作业。");
   }
   if (submission.status === "submitted") {
     return submissionDto(env, submission);
@@ -572,6 +582,9 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
   const childId = await childIdForSubmissionUser(env, user);
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission || submission.child_id !== childId || submission.status !== "submitted" || !submission.reviewed_at) return null;
+  if (!submission.require_photo_upload) {
+    throw new Error("该任务已改为无需上传照片，不能重新提交。");
+  }
 
   // 兼容轮次表上线前的旧提交：儿童第一次重新提交时，先固化旧的原图、批改图与备注。
   // 后续批改由 submitReview 自动按 MAX(sequence) + 1 追加新的轮次。
@@ -618,6 +631,15 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission) return null;
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) return null;
+  if (submission.status !== "submitted") {
+    throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
+  }
+  const photoCount = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM task_submission_photos WHERE submission_id = ?"
+  ).bind(submissionId).first<{ count: number }>();
+  if (!photoCount?.count) {
+    throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
+  }
   const closedAt = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?").bind(closedAt, submissionId),
@@ -634,7 +656,8 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
 
 export async function getTaskSubmissionForUser(env: Env, user: AuthUser, taskId: string, taskDate: string) {
   const row = await env.DB.prepare(
-    `SELECT task_submissions.*, tasks.title AS task_title, tasks.schedule_time AS schedule_time
+    `SELECT task_submissions.*, tasks.title AS task_title, tasks.schedule_time AS schedule_time,
+      tasks.require_photo_upload AS require_photo_upload
      FROM task_submissions INNER JOIN tasks ON tasks.id = task_submissions.task_id
      WHERE task_submissions.task_id = ? AND task_submissions.task_date = ? LIMIT 1`
   ).bind(taskId, taskDate).first<SubmissionRow>();

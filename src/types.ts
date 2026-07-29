@@ -97,6 +97,7 @@ export interface TaskRow {
   voice_enable: number;
   voice_content: string | null;
   voice_reminder_count: number;
+  require_photo_upload: number;
   active: number;
   created_at: string;
   record_status: string | null;
@@ -120,6 +121,7 @@ export interface TaskDto {
   voiceEnabled: boolean;
   voiceContent: string;
   voiceReminderCount: number;
+  requiresPhotoUpload: boolean;
   status: "pending" | "completed" | "missed";
   occurrenceDate: string | null;
   completedAt: string | null;
@@ -141,6 +143,7 @@ export interface CreateTaskInput {
   voiceEnabled?: boolean;
   voiceContent?: string;
   voiceReminderCount?: number;
+  requiresPhotoUpload?: boolean;
 }
 
 export interface SubmissionRow {
@@ -161,6 +164,7 @@ export interface SubmissionRow {
   finalized_at: string | null;
   task_title: string;
   schedule_time: string;
+  require_photo_upload: number;
   child_name?: string | null;
 }
 

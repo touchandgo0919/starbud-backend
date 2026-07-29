@@ -92,6 +92,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
     voiceReminderCount: row.voice_reminder_count,
+    requiresPhotoUpload: Boolean(row.require_photo_upload),
     status: !awaitingParentClose && row.record_status === "completed" ? "completed" : "pending",
     occurrenceDate,
     completedAt: awaitingParentClose ? null : row.completed_at,
@@ -124,8 +125,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -135,7 +136,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.repeatType,
       values.voiceEnabled ? 1 : 0,
       values.voiceContent,
-      values.voiceReminderCount
+      values.voiceReminderCount,
+      values.requiresPhotoUpload ? 1 : 0
     )
     .run();
 
@@ -180,7 +182,8 @@ function validateTaskInput(input: CreateTaskInput) {
     repeatType: input.repeatType,
     voiceEnabled: input.voiceEnabled !== false,
     voiceContent,
-    voiceReminderCount
+    voiceReminderCount,
+    requiresPhotoUpload: input.requiresPhotoUpload !== false
   };
 }
 
@@ -207,7 +210,8 @@ export async function updateTaskForUser(
       repeat_type = ?,
       voice_enable = ?,
       voice_content = ?,
-      voice_reminder_count = ?
+      voice_reminder_count = ?,
+      require_photo_upload = ?
      WHERE id = ?
       AND active = 1`
   )
@@ -218,6 +222,7 @@ export async function updateTaskForUser(
       values.voiceEnabled ? 1 : 0,
       values.voiceContent,
       values.voiceReminderCount,
+      values.requiresPhotoUpload ? 1 : 0,
       taskId
     )
     .run();
@@ -655,12 +660,20 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     return null;
   }
 
-  if (user.role === "child" && (await childIdForUser(env, user)) !== task.childId) {
-    return null;
+  if (user.role === "child") {
+    throw new Error("儿童端请通过领取或提交照片完成任务。");
   }
 
   if (user.role === "parent" && !(await canAccessChild(env, user, task.childId))) {
     return null;
+  }
+
+  if (!task.claimedAt) {
+    throw new Error("请等待小朋友领取任务后再关闭。");
+  }
+
+  if (task.requiresPhotoUpload) {
+    throw new Error("照片型任务需由小朋友提交照片后，在提交详情中关闭。");
   }
 
   return completeTask(env, taskId);
