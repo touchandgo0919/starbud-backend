@@ -412,7 +412,7 @@ export async function submitReview(
        (id, review_round_id, sequence, object_key, access_token, content_type, byte_size)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(reviewId, roundId, imageSequence, objectKey, accessToken, image.type, image.size),
-    ...(currentRound ? [] : [env.DB.prepare(
+    env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content)
        VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?)`
@@ -421,7 +421,7 @@ export async function submitReview(
       recipient.child_user_id,
       submissionId,
       `你的「${submission.task_title}」已经批改完成，快去看看吧！`
-    )])
+    )
   ]);
 
   const updated = await getSubmissionRow(env, submissionId);
