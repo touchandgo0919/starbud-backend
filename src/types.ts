@@ -187,6 +187,7 @@ export interface SubmissionPhotoDto {
   url: string;
   contentType: string;
   byteSize: number;
+  createdAt: string;
 }
 
 export interface SubmissionReviewRoundDto {
@@ -196,6 +197,7 @@ export interface SubmissionReviewRoundDto {
   photos: SubmissionPhotoDto[];
   reviewImages: SubmissionPhotoDto[];
   reviewImageUrl: string;
+  submittedAt: string | null;
   reviewedAt: string;
 }
 

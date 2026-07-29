@@ -22,7 +22,8 @@ function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
     id: row.id,
     url: `/api/submission-files/${row.id}?token=${encodeURIComponent(row.access_token)}`,
     contentType: row.content_type,
-    byteSize: row.byte_size
+    byteSize: row.byte_size,
+    createdAt: row.created_at
   };
 }
 
@@ -48,6 +49,7 @@ interface ReviewRoundRow {
   review_object_key: string;
   review_access_token: string;
   review_content_type: string;
+  submitted_at: string | null;
   reviewed_at: string;
 }
 
@@ -68,7 +70,8 @@ function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
     id: photo.id,
     url: `/api/review-round-photos/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}`,
     contentType: photo.content_type,
-    byteSize: photo.byte_size
+    byteSize: photo.byte_size,
+    createdAt: photo.created_at
   }));
 }
 
@@ -83,14 +86,16 @@ async function reviewRoundImages(env: Env, round: ReviewRoundRow): Promise<Submi
       id: `legacy-${round.id}`,
       url: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
       contentType: round.review_content_type,
-      byteSize: 0
+      byteSize: 0,
+      createdAt: round.reviewed_at
     }];
   }
   return result.results.map((image) => ({
     id: image.id,
     url: `/api/review-round-images/${image.id}?token=${encodeURIComponent(image.access_token)}`,
     contentType: image.content_type,
-    byteSize: image.byte_size
+    byteSize: image.byte_size,
+    createdAt: image.created_at
   }));
 }
 
@@ -108,6 +113,7 @@ async function getSubmissionReviewRounds(env: Env, submissionId: string): Promis
     photos: reviewRoundPhotos(round),
     reviewImages: await reviewRoundImages(env, round),
     reviewImageUrl: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
+    submittedAt: round.submitted_at,
     reviewedAt: round.reviewed_at
   })));
 }
@@ -128,9 +134,11 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
         id: `legacy-${row.id}`,
         url: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
         contentType: row.review_content_type || "image/png",
-        byteSize: 0
+        byteSize: 0,
+        createdAt: row.reviewed_at || row.submitted_at || row.created_at
       }],
       reviewImageUrl: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
+      submittedAt: row.submitted_at,
       reviewedAt: row.reviewed_at || row.submitted_at || row.created_at
     }];
   return {
@@ -422,9 +430,9 @@ export async function submitReview(
     ).bind(reviewId, objectKey, accessToken, image.type, image.size, reviewedAt, submissionId),
     ...(currentRound ? [] : [env.DB.prepare(
       `INSERT INTO submission_review_rounds
-       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, reviewed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(roundId, submissionId, nextSequence, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, reviewedAt)]),
+       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, submitted_at, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(roundId, submissionId, nextSequence, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, submission.submitted_at, reviewedAt)]),
     env.DB.prepare(
       `INSERT INTO submission_review_images
        (id, review_round_id, sequence, object_key, access_token, content_type, byte_size)
