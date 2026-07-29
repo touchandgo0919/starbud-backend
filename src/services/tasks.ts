@@ -733,6 +733,10 @@ export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string,
     .bind(randomId("claim"), taskId, childId, date)
     .run();
 
+  if (!task.requiresPhotoUpload) {
+    return completeTask(env, taskId, date);
+  }
+
   return getTaskById(env, taskId, date);
 }
 
