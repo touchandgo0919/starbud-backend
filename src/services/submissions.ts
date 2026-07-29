@@ -473,6 +473,10 @@ export async function listSubmissions(
   if (!childIds.length) return { submissions: [], total: 0 };
 
   const childPlaceholders = childIds.map(() => "?").join(", ");
+  // The submission list is organized by when the child actually submitted,
+  // rather than by the task's scheduled date. D1 stores ISO timestamps in UTC;
+  // the product calendar uses China Standard Time.
+  const submittedDate = "DATE(datetime(task_submissions.submitted_at, '+8 hours'))";
   const conditions = [
     `task_submissions.child_id IN (${childPlaceholders})`,
     "task_submissions.status = 'submitted'"
@@ -480,12 +484,12 @@ export async function listSubmissions(
   const values: Array<string | number> = [...childIds];
 
   if (options.date) {
-    conditions.push("task_submissions.task_date = ?");
+    conditions.push(`${submittedDate} = ?`);
     values.push(options.date);
   }
 
   if (options.dateFrom && options.dateTo) {
-    conditions.push("task_submissions.task_date BETWEEN ? AND ?");
+    conditions.push(`${submittedDate} BETWEEN ? AND ?`);
     values.push(options.dateFrom, options.dateTo);
   }
 
