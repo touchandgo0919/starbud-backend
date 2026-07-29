@@ -339,7 +339,10 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
   const submittedAt = new Date().toISOString();
   await env.DB.prepare(
     `UPDATE task_submissions
-     SET status = 'submitted', submitted_at = ?
+     SET status = 'submitted', submitted_at = ?,
+         review_id = NULL, review_object_key = NULL, review_access_token = NULL,
+         review_content_type = NULL, review_byte_size = NULL,
+         reviewed_at = NULL, finalized_at = NULL
      WHERE id = ? AND status = 'draft'`
   ).bind(submittedAt, submissionId).run();
 
