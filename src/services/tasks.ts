@@ -660,8 +660,8 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     return null;
   }
 
-  if (user.role === "child") {
-    throw new Error("儿童端请通过领取或提交照片完成任务。");
+  if (user.role === "child" && (await childIdForUser(env, user)) !== task.childId) {
+    return null;
   }
 
   if (user.role === "parent" && !(await canAccessChild(env, user, task.childId))) {
