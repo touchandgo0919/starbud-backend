@@ -625,20 +625,13 @@ async function getCompletedTasks(env: Env, childId: string) {
   return result.results.map((row) => toTaskDto(row));
 }
 
-export async function completeTask(env: Env, taskId: string) {
-  const existing = await getTaskById(env, taskId);
+export async function completeTask(env: Env, taskId: string, taskDate = todayKey(env)) {
+  const existing = await getTaskById(env, taskId, taskDate, true);
 
-  if (
-    !existing ||
-    !shouldRunOnDate(env, {
-      repeat_type: existing.repeatType,
-      created_at: existing.createdAt
-    })
-  ) {
+  if (!existing) {
     return null;
   }
 
-  const date = todayKey(env);
   const completedAt = new Date().toISOString();
 
   await env.DB.prepare(
@@ -647,14 +640,15 @@ export async function completeTask(env: Env, taskId: string) {
      ON CONFLICT(task_id, date)
      DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
   )
-    .bind(randomId("record"), taskId, date, completedAt)
+    .bind(randomId("record"), taskId, taskDate, completedAt)
     .run();
 
-  return getTaskById(env, taskId);
+  return getTaskById(env, taskId, taskDate);
 }
 
-export async function completeTaskForUser(env: Env, user: AuthUser, taskId: string) {
-  const task = await getTaskById(env, taskId);
+export async function completeTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {
+  const date = taskDate || todayKey(env);
+  const task = await getTaskById(env, taskId, date, true);
 
   if (!task) {
     return null;
@@ -676,7 +670,7 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     throw new Error("照片型任务需由小朋友提交照片后，在提交详情中关闭。");
   }
 
-  return completeTask(env, taskId);
+  return completeTask(env, taskId, date);
 }
 
 export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string) {
@@ -716,7 +710,7 @@ export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string
   return task;
 }
 
-export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string) {
+export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {
   if (user.role !== "child") {
     throw new Error("仅儿童账号可以领取任务。");
   }
@@ -726,8 +720,9 @@ export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string)
     throw new Error("当前儿童账号尚未关联家庭成员。");
   }
 
-  const task = (await getTodayTasks(env, childId)).find((item) => item.id === taskId);
-  if (!task) {
+  const date = taskDate || todayKey(env);
+  const task = await getTaskById(env, taskId, date, true);
+  if (!task || task.childId !== childId) {
     return null;
   }
 
@@ -735,10 +730,10 @@ export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string)
     `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date)
      VALUES (?, ?, ?, ?)`
   )
-    .bind(randomId("claim"), taskId, childId, todayKey(env))
+    .bind(randomId("claim"), taskId, childId, date)
     .run();
 
-  return getTaskById(env, taskId);
+  return getTaskById(env, taskId, date);
 }
 
 export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string) {
@@ -764,8 +759,8 @@ export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string
   return result.meta.changes > 0;
 }
 
-export async function getTaskById(env: Env, taskId: string) {
-  const date = todayKey(env);
+export async function getTaskById(env: Env, taskId: string, date = todayKey(env), requireOccurrence = false) {
+  if (!parseDateKey(date)) return null;
   const row = await env.DB.prepare(
     `SELECT
       tasks.*,
@@ -801,11 +796,13 @@ export async function getTaskById(env: Env, taskId: string) {
     .bind(date, date, date, taskId)
     .first<TaskRow>();
 
-  return row ? toTaskDto(row) : null;
+  if (!row) return null;
+  if (requireOccurrence && !shouldRunOnDate(env, row, parseDateKey(date) || undefined)) return null;
+  return toTaskDto(row, date);
 }
 
-export async function getTaskForUser(env: Env, user: AuthUser, taskId: string) {
-  const task = await getTaskById(env, taskId);
+export async function getTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {
+  const task = await getTaskById(env, taskId, taskDate || todayKey(env));
   if (!task || user.role === "admin") return task;
 
   if (user.role === "child") {

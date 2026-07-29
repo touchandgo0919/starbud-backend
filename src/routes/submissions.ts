@@ -144,11 +144,11 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     }
 
     if (request.method === "POST" && createMatch) {
-      const input = (await request.json().catch(() => null)) as { note?: string } | null;
+      const input = (await request.json().catch(() => null)) as { note?: string; taskDate?: string } | null;
       if (!input) {
         return badRequest("Invalid JSON body.");
       }
-      const submission = await createSubmission(env, user, createMatch[1], input.note);
+      const submission = await createSubmission(env, user, createMatch[1], input.note, input.taskDate);
       return submission
         ? jsonResponse({ submission }, { status: 201 })
         : notFound();

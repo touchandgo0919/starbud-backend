@@ -11,7 +11,7 @@ import type {
   SubmissionRow
 } from "../types";
 import { childIdForUser, listChildren } from "./children";
-import { getTodayTasks, todayKey } from "./tasks";
+import { getTaskById, todayKey } from "./tasks";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const maxPhotoBytes = 10 * 1024 * 1024;
@@ -192,18 +192,19 @@ export async function createSubmission(
   env: Env,
   user: AuthUser,
   taskId: string,
-  noteValue?: string
+  noteValue?: string,
+  taskDate?: string
 ) {
   const childId = await childIdForSubmissionUser(env, user);
-  const taskDate = todayKey(env);
+  const date = taskDate || todayKey(env);
   const note = noteValue?.trim() || "";
 
   if (note.length > 500) {
     throw new Error("补充说明不能超过 500 个字。");
   }
 
-  const task = (await getTodayTasks(env, childId)).find((item) => item.id === taskId);
-  if (!task) {
+  const task = await getTaskById(env, taskId, date, true);
+  if (!task || task.childId !== childId) {
     return null;
   }
   if (!task.requiresPhotoUpload) {
@@ -215,12 +216,12 @@ export async function createSubmission(
     env.DB.prepare(
       `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date)
        VALUES (?, ?, ?, ?)`
-    ).bind(randomId("claim"), taskId, childId, taskDate),
+    ).bind(randomId("claim"), taskId, childId, date),
     env.DB.prepare(
       `INSERT OR IGNORE INTO task_submissions
         (id, task_id, child_id, task_date, note, status)
        VALUES (?, ?, ?, ?, ?, 'draft')`
-    ).bind(id, taskId, childId, taskDate, note)
+    ).bind(id, taskId, childId, date, note)
   ]);
 
   const existing = await env.DB.prepare(
@@ -229,7 +230,7 @@ export async function createSubmission(
      WHERE task_id = ? AND child_id = ? AND task_date = ?
      LIMIT 1`
   )
-    .bind(taskId, childId, taskDate)
+    .bind(taskId, childId, date)
     .first<{ id: string; status: "draft" | "submitted" }>();
 
   if (!existing) {

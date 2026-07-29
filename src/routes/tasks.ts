@@ -88,7 +88,8 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   const remindMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/remind$/);
 
   if (request.method === "POST" && completeMatch) {
-    const task = await completeTaskForUser(env, user, completeMatch[1]);
+    const input = (await request.json().catch(() => ({}))) as { taskDate?: string };
+    const task = await completeTaskForUser(env, user, completeMatch[1], input.taskDate);
 
     if (!task) {
       return notFound();
@@ -110,7 +111,8 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
 
   if (request.method === "POST" && claimMatch) {
     try {
-      const task = await claimTaskForUser(env, user, claimMatch[1]);
+      const input = (await request.json().catch(() => ({}))) as { taskDate?: string };
+      const task = await claimTaskForUser(env, user, claimMatch[1], input.taskDate);
       return task ? jsonResponse({ task }) : notFound();
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "任务领取失败。");
@@ -120,7 +122,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   const deleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
 
   if (request.method === "GET" && deleteMatch) {
-    const task = await getTaskForUser(env, user, deleteMatch[1]);
+    const task = await getTaskForUser(env, user, deleteMatch[1], url.searchParams.get("date") || undefined);
     return task ? jsonResponse({ task }) : notFound();
   }
 
