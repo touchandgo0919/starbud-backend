@@ -721,10 +721,19 @@ export async function repairTaskStatusForUser(
   if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) return null;
 
   const submission = await env.DB.prepare(
-    `SELECT id FROM task_submissions
-     WHERE task_id = ? AND child_id = ? AND task_date = ?
+    `SELECT task_submissions.id, task_submissions.status,
+            tasks.title AS task_title, children.child_user_id
+     FROM task_submissions
+     INNER JOIN tasks ON tasks.id = task_submissions.task_id
+     INNER JOIN children ON children.id = task_submissions.child_id
+     WHERE task_submissions.task_id = ? AND task_submissions.child_id = ? AND task_submissions.task_date = ?
      LIMIT 1`
-  ).bind(taskId, task.childId, date).first<{ id: string }>();
+  ).bind(taskId, task.childId, date).first<{
+    id: string;
+    status: string;
+    task_title: string;
+    child_user_id: string | null;
+  }>();
 
   if (input.status === "unclaimed") {
     if (submission) {
@@ -744,21 +753,52 @@ export async function repairTaskStatusForUser(
       ).bind(randomId("claim"), taskId, task.childId, date, localTimestamp())
     ]);
   } else {
-    if (task.requiresPhotoUpload) {
-      throw new Error("照片型任务请在批改流程中关闭，不能直接标记完成。");
-    }
-    await env.DB.batch([
+    const completedAt = localTimestamp();
+    const statements = [
       env.DB.prepare(
         `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
          VALUES (?, ?, ?, ?, ?)`
-      ).bind(randomId("claim"), taskId, task.childId, date, localTimestamp()),
+      ).bind(randomId("claim"), taskId, task.childId, date, completedAt),
       env.DB.prepare(
         `INSERT INTO task_records (id, task_id, date, status, completed_at)
          VALUES (?, ?, ?, 'completed', ?)
          ON CONFLICT(task_id, date)
          DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
-      ).bind(randomId("record"), taskId, date, localTimestamp())
-    ]);
+      ).bind(randomId("record"), taskId, date, completedAt)
+    ];
+
+    if (task.requiresPhotoUpload) {
+      const photoCount = submission
+        ? await env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM task_submission_photos WHERE submission_id = ?"
+        ).bind(submission.id).first<{ count: number }>()
+        : null;
+      if (submission?.status !== "submitted" || !photoCount?.count) {
+        throw new Error("照片型任务需至少提交一张作业照片后才能直接完成。");
+      }
+
+      statements.push(
+        env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?")
+          .bind(completedAt, submission.id)
+      );
+      if (submission.child_user_id) {
+        statements.push(
+          env.DB.prepare(
+            `INSERT INTO notifications
+             (id, recipient_user_id, submission_id, type, title, content, created_at)
+             VALUES (?, ?, ?, 'task_completed', '任务已完成', ?, ?)`
+          ).bind(
+            randomId("notification"),
+            submission.child_user_id,
+            submission.id,
+            `你的「${submission.task_title}」已由家长确认完成。`,
+            completedAt
+          )
+        );
+      }
+    }
+
+    await env.DB.batch(statements);
   }
 
   return getTaskById(env, taskId, date);
