@@ -1,4 +1,4 @@
-import { randomId } from "../utils";
+import { localTimestamp, randomId } from "../utils";
 import { hashPassword } from "./auth";
 import type {
   AdminUserDto,
@@ -42,10 +42,10 @@ export async function createUser(env: Env, actor: AuthUser, input: SaveUserInput
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (id, username, password_hash, display_name, role, active)
-     VALUES (?, ?, ?, ?, ?, 1)`
+    `INSERT INTO users (id, username, password_hash, display_name, role, active, created_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)`
   )
-    .bind(id, username, await hashPassword(password), displayName, role)
+    .bind(id, username, await hashPassword(password), displayName, role, localTimestamp())
     .run();
 
   if (role === "child") {
@@ -70,10 +70,10 @@ export async function registerParent(env: Env, input: RegisterParentInput) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (id, username, password_hash, display_name, role, active)
-     VALUES (?, ?, ?, ?, 'parent', 1)`
+    `INSERT INTO users (id, username, password_hash, display_name, role, active, created_at)
+     VALUES (?, ?, ?, ?, 'parent', 1, ?)`
   )
-    .bind(id, username, await hashPassword(password), displayName)
+    .bind(id, username, await hashPassword(password), displayName, localTimestamp())
     .run();
 
   return getUser(env, id);
@@ -94,10 +94,10 @@ export async function createChildUser(env: Env, input: CreateChildInput) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (id, username, password_hash, display_name, role, active)
-     VALUES (?, ?, ?, ?, 'child', 1)`
+    `INSERT INTO users (id, username, password_hash, display_name, role, active, created_at)
+     VALUES (?, ?, ?, ?, 'child', 1, ?)`
   )
-    .bind(id, username, await hashPassword(password), displayName)
+    .bind(id, username, await hashPassword(password), displayName, localTimestamp())
     .run();
 
   await ensureChildProfile(env, id, displayName);
@@ -184,10 +184,10 @@ async function ensureChildProfile(env: Env, userId: string, displayName: string)
   }
 
   await env.DB.prepare(
-    `INSERT INTO children (id, user_id, child_user_id, name, device_id)
-     VALUES (?, ?, ?, ?, NULL)`
+    `INSERT INTO children (id, user_id, child_user_id, name, device_id, created_at)
+     VALUES (?, ?, ?, ?, NULL, ?)`
   )
-    .bind(randomId("child"), userId, userId, displayName)
+    .bind(randomId("child"), userId, userId, displayName, localTimestamp())
     .run();
 }
 

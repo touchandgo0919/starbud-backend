@@ -1,4 +1,4 @@
-import { randomId } from "../utils";
+import { localTimestamp, randomId } from "../utils";
 import type { AuthUser, CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
@@ -45,11 +45,14 @@ function dateParts(env: Env, date = new Date()) {
   };
 }
 
-function parseCreatedAt(value: string) {
-  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value)
-    ? value
-    : `${value.replace(" ", "T")}Z`;
-  return new Date(normalized);
+function storedDateParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (date.getFullYear() !== Number(match[1]) || date.getMonth() !== Number(match[2]) - 1 || date.getDate() !== Number(match[3])) {
+    return null;
+  }
+  return { key: `${match[1]}-${match[2]}-${match[3]}`, weekday: date.getDay() };
 }
 
 function shouldRunOnDate(
@@ -58,7 +61,8 @@ function shouldRunOnDate(
   date = new Date()
 ) {
   const today = dateParts(env, date);
-  const created = dateParts(env, parseCreatedAt(row.created_at));
+  const created = storedDateParts(row.created_at);
+  if (!created) return false;
 
   if (today.key < created.key) {
     return false;
@@ -147,8 +151,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -159,7 +163,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.voiceEnabled ? 1 : 0,
       values.voiceContent,
       values.voiceReminderCount,
-      values.requiresPhotoUpload ? 1 : 0
+      values.requiresPhotoUpload ? 1 : 0,
+      localTimestamp()
     )
     .run();
 
@@ -481,8 +486,9 @@ function parseDateKey(value: string) {
     return null;
   }
 
-  const date = new Date(`${value}T12:00:00.000Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day ? null : date;
 }
 
 function dateKeysBetween(from: string, to: string) {
@@ -491,8 +497,8 @@ function dateKeysBetween(from: string, to: string) {
   if (!start || !end) return [];
 
   const dates: string[] = [];
-  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-    dates.push(cursor.toISOString().slice(0, 10));
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    dates.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`);
   }
   return dates;
 }
@@ -657,7 +663,7 @@ export async function completeTask(env: Env, taskId: string, taskDate = todayKey
     return null;
   }
 
-  const completedAt = new Date().toISOString();
+  const completedAt = localTimestamp();
 
   await env.DB.prepare(
     `INSERT INTO task_records (id, task_id, date, status, completed_at)
@@ -726,10 +732,10 @@ export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string
 
   await env.DB.prepare(
     `INSERT INTO notifications
-     (id, recipient_user_id, type, title, content)
-     VALUES (?, ?, 'voice_reminder', '星星芽AI助手 任务提醒', ?)`
+     (id, recipient_user_id, type, title, content, created_at)
+     VALUES (?, ?, 'voice_reminder', '星星芽AI助手 任务提醒', ?, ?)`
   )
-    .bind(randomId("notification"), child.child_user_id, task.voiceContent)
+    .bind(randomId("notification"), child.child_user_id, task.voiceContent, localTimestamp())
     .run();
 
   return task;
@@ -752,10 +758,10 @@ export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string,
   }
 
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date)
-     VALUES (?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
+     VALUES (?, ?, ?, ?, ?)`
   )
-    .bind(randomId("claim"), taskId, childId, date)
+    .bind(randomId("claim"), taskId, childId, date, localTimestamp())
     .run();
 
   if (!task.requiresPhotoUpload) {

@@ -1,4 +1,4 @@
-import { randomId } from "../utils";
+import { localTimestamp, randomId } from "../utils";
 import type {
   AuthUser,
   CreateChildInput,
@@ -37,17 +37,17 @@ export async function createFamily(env: Env, user: AuthUser, name?: string) {
   const id = randomId("family");
 
   await env.DB.prepare(
-    `INSERT INTO families (id, name, created_by)
-     VALUES (?, ?, ?)`
+    `INSERT INTO families (id, name, created_by, created_at)
+     VALUES (?, ?, ?, ?)`
   )
-    .bind(id, normalizedName, user.id)
+    .bind(id, normalizedName, user.id, localTimestamp())
     .run();
 
   await env.DB.prepare(
-    `INSERT INTO family_members (family_id, user_id, relationship)
-     VALUES (?, ?, ?)`
+    `INSERT INTO family_members (family_id, user_id, relationship, created_at)
+     VALUES (?, ?, ?, ?)`
   )
-    .bind(id, user.id, DEFAULT_RELATIONSHIPS.parent)
+    .bind(id, user.id, DEFAULT_RELATIONSHIPS.parent, localTimestamp())
     .run();
 
   return getFamilyForUser(env, id, user);
@@ -114,12 +114,12 @@ export async function addFamilyMember(
   );
 
   await env.DB.prepare(
-    `INSERT INTO family_members (family_id, user_id, relationship)
-     VALUES (?, ?, ?)
+    `INSERT INTO family_members (family_id, user_id, relationship, created_at)
+     VALUES (?, ?, ?, ?)
      ON CONFLICT(family_id, user_id)
      DO UPDATE SET relationship = excluded.relationship`
   )
-    .bind(familyId, member.id, normalizedRelationship)
+    .bind(familyId, member.id, normalizedRelationship, localTimestamp())
     .run();
 
   return getFamilyForUser(env, familyId, user);
@@ -139,12 +139,12 @@ export async function createFamilyChild(
   }
 
   await env.DB.prepare(
-    `INSERT INTO family_members (family_id, user_id, relationship)
-     VALUES (?, ?, ?)
+    `INSERT INTO family_members (family_id, user_id, relationship, created_at)
+     VALUES (?, ?, ?, ?)
      ON CONFLICT(family_id, user_id)
      DO UPDATE SET relationship = excluded.relationship`
   )
-    .bind(familyId, child.id, normalizeRelationship(input.relationship, DEFAULT_RELATIONSHIPS.child))
+    .bind(familyId, child.id, normalizeRelationship(input.relationship, DEFAULT_RELATIONSHIPS.child), localTimestamp())
     .run();
 
   return getFamilyForUser(env, familyId, user);

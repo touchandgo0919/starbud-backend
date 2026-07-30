@@ -1,5 +1,6 @@
 import type { Env, UserRole } from "../types";
 import { hashPassword } from "../services/auth";
+import { localTimestamp } from "../utils";
 
 const defaultUsers: Array<{
   id: string;
@@ -89,10 +90,10 @@ export async function ensureDefaultUsers(env: Env) {
     const passwordHash = await hashPassword(password);
 
     await env.DB.prepare(
-      `INSERT INTO users (id, username, password_hash, display_name, role, active)
-       VALUES (?, ?, ?, ?, ?, 1)`
+      `INSERT INTO users (id, username, password_hash, display_name, role, active, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`
     )
-      .bind(user.id, user.username, passwordHash, user.displayName, user.role)
+      .bind(user.id, user.username, passwordHash, user.displayName, user.role, localTimestamp())
       .run();
   }
 
@@ -102,10 +103,10 @@ export async function ensureDefaultUsers(env: Env) {
 
   for (const child of defaultChildren) {
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO children (id, user_id, name, device_id)
-       VALUES (?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO children (id, user_id, name, device_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`
     )
-      .bind(child.id, child.userId, child.name, child.deviceId)
+      .bind(child.id, child.userId, child.name, child.deviceId, localTimestamp())
       .run();
 
     await env.DB.prepare("UPDATE children SET child_user_id = ? WHERE id = ?")
@@ -114,9 +115,9 @@ export async function ensureDefaultUsers(env: Env) {
   }
 
   const defaultFamilyResult = await env.DB.prepare(
-    `INSERT OR IGNORE INTO families (id, name, created_by, is_default)
-     VALUES ('family-zhao', '赵家', 'user-zhaotao', 1)`
-  ).run();
+    `INSERT OR IGNORE INTO families (id, name, created_by, is_default, created_at)
+     VALUES ('family-zhao', '赵家', 'user-zhaotao', 1, ?)`
+  ).bind(localTimestamp()).run();
 
   if (defaultFamilyResult.meta.changes > 0) {
     const defaultFamilyMembers = [
@@ -128,10 +129,10 @@ export async function ensureDefaultUsers(env: Env) {
 
     for (const [userId, relationship] of defaultFamilyMembers) {
       await env.DB.prepare(
-        `INSERT INTO family_members (family_id, user_id, relationship)
-         VALUES ('family-zhao', ?, ?)`
+        `INSERT INTO family_members (family_id, user_id, relationship, created_at)
+         VALUES ('family-zhao', ?, ?, ?)`
       )
-        .bind(userId, relationship)
+        .bind(userId, relationship, localTimestamp())
         .run();
     }
   }

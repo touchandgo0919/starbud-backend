@@ -1,4 +1,4 @@
-import { randomId } from "../utils";
+import { localTimestamp, randomId } from "../utils";
 import type {
   AuthUser,
   Env,
@@ -222,14 +222,14 @@ export async function createSubmission(
   const id = randomId("submission");
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date)
-       VALUES (?, ?, ?, ?)`
-    ).bind(randomId("claim"), taskId, childId, date),
+      `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(randomId("claim"), taskId, childId, date, localTimestamp()),
     env.DB.prepare(
       `INSERT OR IGNORE INTO task_submissions
-        (id, task_id, child_id, task_date, note, status)
-       VALUES (?, ?, ?, ?, ?, 'draft')`
-    ).bind(id, taskId, childId, date, note)
+        (id, task_id, child_id, task_date, note, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'draft', ?)`
+    ).bind(id, taskId, childId, date, note, localTimestamp())
   ]);
 
   const existing = await env.DB.prepare(
@@ -301,10 +301,10 @@ export async function uploadSubmissionPhoto(
   try {
     await env.DB.prepare(
       `INSERT INTO task_submission_photos
-        (id, submission_id, object_key, access_token, content_type, byte_size)
-       VALUES (?, ?, ?, ?, ?, ?)`
+        (id, submission_id, object_key, access_token, content_type, byte_size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(id, submissionId, objectKey, accessToken, photo.type, photo.size)
+      .bind(id, submissionId, objectKey, accessToken, photo.type, photo.size, localTimestamp())
       .run();
   } catch (error) {
     await env.SUBMISSION_FILES.delete(objectKey);
@@ -344,7 +344,7 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
     throw new Error("请至少上传一张作业照片。");
   }
 
-  const submittedAt = new Date().toISOString();
+  const submittedAt = localTimestamp();
   await env.DB.prepare(
     `UPDATE task_submissions
      SET status = 'submitted', submitted_at = ?,
@@ -397,7 +397,7 @@ export async function submitReview(
   const reviewId = randomId("review");
   const accessToken = randomId("review-file");
   const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
-  const reviewedAt = new Date().toISOString();
+  const reviewedAt = localTimestamp();
   const photos = await getSubmissionPhotos(env, submissionId);
   const currentRound = submission.review_id
     ? await env.DB.prepare(
@@ -435,18 +435,19 @@ export async function submitReview(
     ).bind(roundId, submissionId, nextSequence, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, submission.submitted_at, reviewedAt)]),
     env.DB.prepare(
       `INSERT INTO submission_review_images
-       (id, review_round_id, sequence, object_key, access_token, content_type, byte_size)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(reviewId, roundId, imageSequence, objectKey, accessToken, image.type, image.size),
+       (id, review_round_id, sequence, object_key, access_token, content_type, byte_size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(reviewId, roundId, imageSequence, objectKey, accessToken, image.type, image.size, reviewedAt),
     env.DB.prepare(
       `INSERT INTO notifications
-       (id, recipient_user_id, submission_id, type, title, content)
-       VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?)`
+       (id, recipient_user_id, submission_id, type, title, content, created_at)
+       VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?, ?)`
     ).bind(
       randomId("notification"),
       recipient.child_user_id,
       submissionId,
-      `你的「${submission.task_title}」已经批改完成，快去看看吧！`
+      `你的「${submission.task_title}」已经批改完成，快去看看吧！`,
+      reviewedAt
     )
   ]);
 
@@ -473,10 +474,9 @@ export async function listSubmissions(
   if (!childIds.length) return { submissions: [], total: 0 };
 
   const childPlaceholders = childIds.map(() => "?").join(", ");
-  // The submission list is organized by when the child actually submitted,
-  // rather than by the task's scheduled date. D1 stores ISO timestamps in UTC;
-  // the product calendar uses China Standard Time.
-  const submittedDate = "DATE(datetime(task_submissions.submitted_at, '+8 hours'))";
+  // Timestamps are persisted as local UTC+8 wall-clock strings, so filtering
+  // by date must use the stored value directly.
+  const submittedDate = "DATE(task_submissions.submitted_at)";
   const conditions = [
     `task_submissions.child_id IN (${childPlaceholders})`,
     "task_submissions.status = 'submitted'"
@@ -656,7 +656,7 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
   if (!photoCount?.count) {
     throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
   }
-  const closedAt = new Date().toISOString();
+  const closedAt = localTimestamp();
   await env.DB.batch([
     env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?").bind(closedAt, submissionId),
     env.DB.prepare(
@@ -711,7 +711,7 @@ export async function markNotificationRead(env: Env, user: AuthUser, notificatio
      SET read_at = COALESCE(read_at, ?)
      WHERE id = ? AND recipient_user_id = ?`
   )
-    .bind(new Date().toISOString(), notificationId, user.id)
+    .bind(localTimestamp(), notificationId, user.id)
     .run();
   return result.meta.changes > 0;
 }
