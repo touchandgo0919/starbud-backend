@@ -180,11 +180,14 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
     if (request.method === "POST" && reviewMatch) {
       const formData = await request.formData().catch(() => null);
-      const image = formData?.get("image");
-      if (!(image instanceof File)) {
+      const images = formData
+        ? [...formData.getAll("images"), formData.get("image")]
+          .filter((image): image is File => image instanceof File)
+        : [];
+      if (!images.length) {
         return badRequest("请上传批改后的图片。");
       }
-      const submission = await submitReview(env, user, reviewMatch[1], image);
+      const submission = await submitReview(env, user, reviewMatch[1], images);
       return submission ? jsonResponse({ submission }) : notFound();
     }
 

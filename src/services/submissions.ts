@@ -362,7 +362,7 @@ export async function submitReview(
   env: Env,
   user: AuthUser,
   submissionId: string,
-  image: File
+  inputImages: File[]
 ) {
   if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长或管理员可以提交批改。");
@@ -381,7 +381,10 @@ export async function submitReview(
     }
   }
 
-  if (!allowedPhotoTypes.has(image.type) || image.size > maxPhotoBytes) {
+  if (!inputImages.length) {
+    throw new Error("请上传至少一张批改后的图片。");
+  }
+  if (inputImages.some((image) => !allowedPhotoTypes.has(image.type) || image.size > maxPhotoBytes)) {
     throw new Error("批改图片格式或大小不符合要求。");
   }
 
@@ -394,9 +397,6 @@ export async function submitReview(
     throw new Error("未找到儿童账号，无法发送通知。");
   }
 
-  const reviewId = randomId("review");
-  const accessToken = randomId("review-file");
-  const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
   const reviewedAt = localTimestamp();
   const photos = await getSubmissionPhotos(env, submissionId);
   const currentRound = submission.review_id
@@ -411,15 +411,21 @@ export async function submitReview(
     ? currentRound.sequence
     : (await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_rounds WHERE submission_id = ?")
       .bind(submissionId).first<{ sequence: number }>())?.sequence || 1;
-  const imageSequence = currentRound
+  const firstImageSequence = currentRound
     ? (await env.DB.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_images WHERE review_round_id = ?")
       .bind(currentRound.id).first<{ sequence: number }>())?.sequence || 1
     : 1;
   const roundId = currentRound?.id || randomId("round");
-
-  await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
-    httpMetadata: { contentType: image.type }
-  });
+  const reviewImages = await Promise.all(inputImages.map(async (image) => {
+    const reviewId = randomId("review");
+    const accessToken = randomId("review-file");
+    const objectKey = `reviews/${submission.child_id}/${submissionId}/${reviewId}`;
+    await env.SUBMISSION_FILES.put(objectKey, image.stream(), {
+      httpMetadata: { contentType: image.type }
+    });
+    return { reviewId, accessToken, objectKey, image };
+  }));
+  const latestImage = reviewImages[reviewImages.length - 1];
 
   await env.DB.batch([
     env.DB.prepare(
@@ -427,17 +433,45 @@ export async function submitReview(
        SET review_id = ?, review_object_key = ?, review_access_token = ?,
            review_content_type = ?, review_byte_size = ?, reviewed_at = ?
        WHERE id = ?`
-    ).bind(reviewId, objectKey, accessToken, image.type, image.size, reviewedAt, submissionId),
+    ).bind(
+      latestImage.reviewId,
+      latestImage.objectKey,
+      latestImage.accessToken,
+      latestImage.image.type,
+      latestImage.image.size,
+      reviewedAt,
+      submissionId
+    ),
     ...(currentRound ? [] : [env.DB.prepare(
       `INSERT INTO submission_review_rounds
        (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, submitted_at, reviewed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(roundId, submissionId, nextSequence, submission.note, JSON.stringify(photos), objectKey, accessToken, image.type, submission.submitted_at, reviewedAt)]),
-    env.DB.prepare(
+    ).bind(
+      roundId,
+      submissionId,
+      nextSequence,
+      submission.note,
+      JSON.stringify(photos),
+      latestImage.objectKey,
+      latestImage.accessToken,
+      latestImage.image.type,
+      submission.submitted_at,
+      reviewedAt
+    )]),
+    ...reviewImages.map((item, index) => env.DB.prepare(
       `INSERT INTO submission_review_images
        (id, review_round_id, sequence, object_key, access_token, content_type, byte_size, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(reviewId, roundId, imageSequence, objectKey, accessToken, image.type, image.size, reviewedAt),
+    ).bind(
+      item.reviewId,
+      roundId,
+      firstImageSequence + index,
+      item.objectKey,
+      item.accessToken,
+      item.image.type,
+      item.image.size,
+      reviewedAt
+    )),
     env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content, created_at)
@@ -446,7 +480,7 @@ export async function submitReview(
       randomId("notification"),
       recipient.child_user_id,
       submissionId,
-      `你的「${submission.task_title}」已经批改完成，快去看看吧！`,
+      `你的「${submission.task_title}」已完成 ${reviewImages.length} 张图片批改，快去看看吧！`,
       reviewedAt
     )
   ]);
