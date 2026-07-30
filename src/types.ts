@@ -101,6 +101,7 @@ export interface TaskRow {
   voice_reminder_count: number;
   require_photo_upload: number;
   active: number;
+  start_date: string | null;
   created_at: string;
   record_status: string | null;
   record_date: string | null;
@@ -136,6 +137,7 @@ export interface TaskDto {
   needsRevision: boolean;
   reviewStatus: TaskReviewStatus;
   submissionPhotoCount: number;
+  startDate: string;
   createdAt: string;
 }
 
@@ -148,6 +150,7 @@ export interface CreateTaskInput {
   voiceContent?: string;
   voiceReminderCount?: number;
   requiresPhotoUpload?: boolean;
+  startDate?: string;
 }
 
 export interface RepairTaskStatusInput {

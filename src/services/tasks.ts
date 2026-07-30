@@ -57,14 +57,14 @@ function storedDateParts(value: string) {
 
 function shouldRunOnDate(
   env: Env,
-  row: Pick<TaskRow, "repeat_type" | "created_at">,
+  row: Pick<TaskRow, "repeat_type" | "created_at" | "start_date">,
   date = new Date()
 ) {
   const today = dateParts(env, date);
-  const created = storedDateParts(row.created_at);
-  if (!created) return false;
+  const start = storedDateParts(row.start_date || row.created_at);
+  if (!start) return false;
 
-  if (today.key < created.key) {
+  if (today.key < start.key) {
     return false;
   }
 
@@ -77,8 +77,8 @@ function shouldRunOnDate(
   }
 
   return row.repeat_type === "weekly"
-    ? created.weekday === today.weekday
-    : created.key === today.key;
+    ? start.weekday === today.weekday
+    : start.key === today.key;
 }
 
 export function todayKey(env: Env, date = new Date()) {
@@ -131,6 +131,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     needsRevision: hasCurrentReview && !hasCurrentFinalization,
     reviewStatus,
     submissionPhotoCount: row.submission_photo_count || 0,
+    startDate: row.start_date || row.created_at.slice(0, 10),
     createdAt: row.created_at
   };
 }
@@ -141,7 +142,7 @@ function withChildNames(tasks: TaskDto[], children: Array<{ id: string; name: st
 }
 
 export async function createTask(env: Env, input: CreateTaskInput) {
-  const values = validateTaskInput(input);
+  const values = validateTaskInput(env, input);
   const id = randomId("task");
   const childId = input.childId;
 
@@ -151,8 +152,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload, start_date, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -164,6 +165,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.voiceContent,
       values.voiceReminderCount,
       values.requiresPhotoUpload ? 1 : 0,
+      values.startDate,
       localTimestamp()
     )
     .run();
@@ -171,7 +173,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
   return getTaskById(env, id);
 }
 
-function validateTaskInput(input: CreateTaskInput) {
+function validateTaskInput(env: Env, input: CreateTaskInput, fallbackStartDate = todayKey(env)) {
   const title = input.title?.trim();
   const scheduleTime = input.scheduleTime?.trim();
   const requestedVoiceContent = input.voiceContent?.trim();
@@ -195,6 +197,11 @@ function validateTaskInput(input: CreateTaskInput) {
     throw new Error("Invalid repeat type.");
   }
 
+  const startDate = input.startDate?.trim() || fallbackStartDate;
+  if (!storedDateParts(startDate) || startDate.length !== 10) {
+    throw new Error("startDate must use YYYY-MM-DD format.");
+  }
+
   if (voiceContent.length > 120) {
     throw new Error("Voice reminder content cannot exceed 120 characters.");
   }
@@ -210,7 +217,8 @@ function validateTaskInput(input: CreateTaskInput) {
     voiceEnabled: input.voiceEnabled !== false,
     voiceContent,
     voiceReminderCount,
-    requiresPhotoUpload: input.requiresPhotoUpload !== false
+    requiresPhotoUpload: input.requiresPhotoUpload !== false,
+    startDate
   };
 }
 
@@ -229,7 +237,7 @@ export async function updateTaskForUser(
     return null;
   }
 
-  const values = validateTaskInput(input);
+  const values = validateTaskInput(env, input, task.startDate);
   await env.DB.prepare(
     `UPDATE tasks
      SET title = ?,
@@ -238,7 +246,8 @@ export async function updateTaskForUser(
       voice_enable = ?,
       voice_content = ?,
       voice_reminder_count = ?,
-      require_photo_upload = ?
+      require_photo_upload = ?,
+      start_date = ?
      WHERE id = ?
       AND active = 1`
   )
@@ -250,6 +259,7 @@ export async function updateTaskForUser(
       values.voiceContent,
       values.voiceReminderCount,
       values.requiresPhotoUpload ? 1 : 0,
+      values.startDate,
       taskId
     )
     .run();
