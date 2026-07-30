@@ -671,6 +671,11 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
     throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
   }
   const closedAt = localTimestamp();
+  const recipient = await env.DB.prepare(
+    "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
+  )
+    .bind(submission.child_id)
+    .first<{ child_user_id: string | null }>();
   await env.DB.batch([
     env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?").bind(closedAt, submissionId),
     env.DB.prepare(
@@ -678,7 +683,18 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
        VALUES (?, ?, ?, 'completed', ?)
        ON CONFLICT(task_id, date)
        DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
-    ).bind(randomId("record"), submission.task_id, submission.task_date, closedAt)
+    ).bind(randomId("record"), submission.task_id, submission.task_date, closedAt),
+    ...(recipient?.child_user_id ? [env.DB.prepare(
+      `INSERT INTO notifications
+       (id, recipient_user_id, submission_id, type, title, content, created_at)
+       VALUES (?, ?, ?, 'task_completed', '任务已完成', ?, ?)`
+    ).bind(
+      randomId("notification"),
+      recipient.child_user_id,
+      submissionId,
+      `你的「${submission.task_title}」已由家长确认完成。`,
+      closedAt
+    )] : [])
   ]);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
