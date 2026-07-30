@@ -150,6 +150,11 @@ export interface CreateTaskInput {
   requiresPhotoUpload?: boolean;
 }
 
+export interface RepairTaskStatusInput {
+  taskDate?: string;
+  status?: "unclaimed" | "claimed" | "completed";
+}
+
 export interface SubmissionRow {
   id: string;
   task_id: string;

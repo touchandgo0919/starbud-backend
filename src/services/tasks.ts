@@ -1,5 +1,5 @@
 import { localTimestamp, randomId } from "../utils";
-import type { AuthUser, CreateTaskInput, Env, TaskDto, TaskRow } from "../types";
+import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, TaskRow } from "../types";
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
 
@@ -702,6 +702,66 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
   }
 
   return completeTask(env, taskId, date);
+}
+
+/** Parent-only recovery tool for correcting accidental claim/completion state. */
+export async function repairTaskStatusForUser(
+  env: Env,
+  user: AuthUser,
+  taskId: string,
+  input: RepairTaskStatusInput
+) {
+  if (user.role !== "parent" && user.role !== "admin") return null;
+  if (!input.status || !["unclaimed", "claimed", "completed"].includes(input.status)) {
+    throw new Error("请选择有效的任务状态。");
+  }
+
+  const date = input.taskDate || todayKey(env);
+  const task = await getTaskById(env, taskId, date, true);
+  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) return null;
+
+  const submission = await env.DB.prepare(
+    `SELECT id FROM task_submissions
+     WHERE task_id = ? AND child_id = ? AND task_date = ?
+     LIMIT 1`
+  ).bind(taskId, task.childId, date).first<{ id: string }>();
+
+  if (input.status === "unclaimed") {
+    if (submission) {
+      throw new Error("已有作业提交，不能恢复为待领取；请先在提交管理中处理作业记录。");
+    }
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(taskId, date),
+      env.DB.prepare("DELETE FROM task_claims WHERE task_id = ? AND child_id = ? AND task_date = ?")
+        .bind(taskId, task.childId, date)
+    ]);
+  } else if (input.status === "claimed") {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(taskId, date),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(randomId("claim"), taskId, task.childId, date, localTimestamp())
+    ]);
+  } else {
+    if (task.requiresPhotoUpload) {
+      throw new Error("照片型任务请在批改流程中关闭，不能直接标记完成。");
+    }
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(randomId("claim"), taskId, task.childId, date, localTimestamp()),
+      env.DB.prepare(
+        `INSERT INTO task_records (id, task_id, date, status, completed_at)
+         VALUES (?, ?, ?, 'completed', ?)
+         ON CONFLICT(task_id, date)
+         DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`
+      ).bind(randomId("record"), taskId, date, localTimestamp())
+    ]);
+  }
+
+  return getTaskById(env, taskId, date);
 }
 
 export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string) {

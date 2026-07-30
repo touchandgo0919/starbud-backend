@@ -11,9 +11,10 @@ import {
   listTaskDefinitionsForUser,
   listTasksForUser,
   remindTaskForUser,
+  repairTaskStatusForUser,
   updateTaskForUser
 } from "../services/tasks";
-import type { CreateTaskInput, Env } from "../types";
+import type { CreateTaskInput, Env, RepairTaskStatusInput } from "../types";
 
 export async function handleTasks(request: Request, env: Env, url: URL) {
   if (!url.pathname.startsWith("/api/tasks")) {
@@ -86,6 +87,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
 
   const completeMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
   const remindMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/remind$/);
+  const statusMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/status$/);
 
   if (request.method === "POST" && completeMatch) {
     const input = (await request.json().catch(() => ({}))) as { taskDate?: string };
@@ -104,6 +106,18 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
       return task ? jsonResponse({ task }) : notFound();
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "提醒发送失败。");
+    }
+  }
+
+  if (request.method === "POST" && statusMatch) {
+    if (user.role === "child") return forbidden("仅家长或管理员可以修正任务状态。");
+    const input = (await request.json().catch(() => null)) as RepairTaskStatusInput | null;
+    if (!input) return badRequest("Invalid JSON body.");
+    try {
+      const task = await repairTaskStatusForUser(env, user, statusMatch[1], input);
+      return task ? jsonResponse({ task }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "任务状态修正失败。");
     }
   }
 
