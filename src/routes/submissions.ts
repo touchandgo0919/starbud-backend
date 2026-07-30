@@ -118,6 +118,13 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
         dateFrom: url.searchParams.get("dateFrom") || undefined,
         dateTo: url.searchParams.get("dateTo") || undefined,
         keyword: url.searchParams.get("keyword") || undefined,
+        childId: url.searchParams.get("childId") || undefined,
+        status: (url.searchParams.get("status") === "draft" || url.searchParams.get("status") === "submitted")
+          ? url.searchParams.get("status") as "draft" | "submitted"
+          : undefined,
+        reviewStatus: (["pending", "reviewed", "completed"] as const).includes(url.searchParams.get("reviewStatus") as "pending" | "reviewed" | "completed")
+          ? url.searchParams.get("reviewStatus") as "pending" | "reviewed" | "completed"
+          : undefined,
         page,
         pageSize
       });

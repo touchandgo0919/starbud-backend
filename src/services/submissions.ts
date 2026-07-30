@@ -463,13 +463,19 @@ export async function listSubmissions(
     dateFrom?: string;
     dateTo?: string;
     keyword?: string;
+    childId?: string;
+    status?: "draft" | "submitted";
+    reviewStatus?: "pending" | "reviewed" | "completed";
     page: number;
     pageSize: number;
   }
 ) {
-  const childIds = user.role === "child"
+  const accessibleChildIds = user.role === "child"
     ? [await childIdForUser(env, user)].filter((childId): childId is string => Boolean(childId))
     : (await listChildren(env, user)).map((child) => child.id);
+  const childIds = options.childId
+    ? accessibleChildIds.filter((childId) => childId === options.childId)
+    : accessibleChildIds;
 
   if (!childIds.length) return { submissions: [], total: 0 };
 
@@ -479,9 +485,9 @@ export async function listSubmissions(
   const submittedDate = "DATE(task_submissions.submitted_at)";
   const conditions = [
     `task_submissions.child_id IN (${childPlaceholders})`,
-    "task_submissions.status = 'submitted'"
+    "task_submissions.status = ?"
   ];
-  const values: Array<string | number> = [...childIds];
+  const values: Array<string | number> = [...childIds, options.status || "submitted"];
 
   if (options.date) {
     conditions.push(`${submittedDate} = ?`);
@@ -496,6 +502,14 @@ export async function listSubmissions(
   if (options.keyword) {
     conditions.push("LOWER(tasks.title) LIKE ?");
     values.push(`%${options.keyword.trim().toLowerCase()}%`);
+  }
+
+  if (options.reviewStatus === "completed") {
+    conditions.push("task_submissions.finalized_at IS NOT NULL");
+  } else if (options.reviewStatus === "reviewed") {
+    conditions.push("task_submissions.reviewed_at IS NOT NULL AND task_submissions.finalized_at IS NULL");
+  } else if (options.reviewStatus === "pending") {
+    conditions.push("task_submissions.reviewed_at IS NULL AND task_submissions.finalized_at IS NULL");
   }
 
   const where = conditions.join(" AND ");
