@@ -87,16 +87,15 @@ export async function recordApiAccessEvent(
   const familyChildrenMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/children$/);
   const familyMatch = url.pathname.match(/^\/api\/families\/([^/]+)$/);
   const adminUserMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
-  let eventName = "api_request";
+  let eventName: string | undefined;
   let resourceType: string | undefined;
   let resourceId: string | undefined;
 
   if (url.pathname === "/api/tasks" && request.method === "GET") {
-    eventName = url.searchParams.get("keyword") ? "task_searched" : "task_list_viewed";
-    resourceType = "task";
-  } else if (url.pathname === "/api/tasks/today") {
-    eventName = "today_tasks_viewed";
-    resourceType = "task";
+    if (url.searchParams.get("keyword")) {
+      eventName = "task_searched";
+      resourceType = "task";
+    }
   } else if (url.pathname === "/api/tasks" && request.method === "POST") {
     eventName = "task_created";
     resourceType = "task";
@@ -109,82 +108,60 @@ export async function recordApiAccessEvent(
       : action === "remind" ? "task_reminder_sent"
       : action === "status" ? "task_status_updated"
       : action === "voice-reminder-completed" ? "task_voice_reminder_completed"
-      : request.method === "GET" ? "task_detail_viewed"
+      : request.method === "GET" && url.searchParams.get("purpose") === "detail" ? "task_detail_viewed"
       : request.method === "PATCH" ? "task_updated"
       : request.method === "DELETE" ? "task_deleted"
-      : "task_action";
+      : undefined;
   } else if (url.pathname === "/api/submissions" && request.method === "GET") {
-    eventName = url.searchParams.get("keyword") ? "submission_searched" : "submission_list_viewed";
-    resourceType = "submission";
+    if (url.searchParams.get("keyword")) {
+      eventName = "submission_searched";
+      resourceType = "submission";
+    }
   } else if (submissionMatch) {
     resourceType = "submission";
     resourceId = submissionMatch[1];
     const action = submissionMatch[2];
-    eventName = action === "photos" ? "submission_photo_uploaded"
-      : action === "submit" ? "submission_submitted"
+    eventName = action === "submit" ? "submission_submitted"
       : action === "review" ? "submission_review_submitted"
       : action === "resubmit" ? "submission_reopened"
       : action === "finalize-review" ? "submission_review_finalized"
-      : request.method === "PATCH" ? "submission_note_updated"
       : request.method === "DELETE" ? "submission_deleted"
-      : "submission_action";
-  } else if (/^\/api\/tasks\/[^/]+\/submissions$/.test(url.pathname)) {
-    eventName = "submission_created";
-    resourceType = "task";
-    resourceId = url.pathname.split("/")[3];
-  } else if (/^\/api\/tasks\/[^/]+\/submission$/.test(url.pathname)) {
-    eventName = "submission_detail_viewed";
-    resourceType = "task";
-    resourceId = url.pathname.split("/")[3];
-  } else if (url.pathname === "/api/children") {
-    eventName = request.method === "POST" ? "family_child_created" : "children_list_viewed";
-    resourceType = request.method === "POST" ? "child" : undefined;
-  } else if (url.pathname === "/api/me") {
-    eventName = "session_restored";
-  } else if (url.pathname === "/api/notifications") {
-    eventName = "notifications_viewed";
-  } else if (/^\/api\/notifications\/[^/]+\/read$/.test(url.pathname)) {
-    eventName = "notification_marked_read";
-    resourceType = "notification";
-    resourceId = url.pathname.split("/")[3];
+      : undefined;
   } else if (familyMemberMatch) {
     resourceType = "family_member";
     resourceId = familyMemberMatch[2];
     eventName = request.method === "PATCH" ? "family_member_updated"
       : request.method === "DELETE" ? "family_member_removed"
-      : "family_member_action";
+      : undefined;
   } else if (familyMembersMatch) {
     resourceType = "family";
     resourceId = familyMembersMatch[1];
-    eventName = request.method === "POST" ? "family_member_added" : "family_members_viewed";
+    eventName = request.method === "POST" ? "family_member_added" : undefined;
   } else if (familyChildrenMatch) {
     resourceType = "family";
     resourceId = familyChildrenMatch[1];
-    eventName = request.method === "POST" ? "family_child_created" : "family_children_viewed";
+    eventName = request.method === "POST" ? "family_child_created" : undefined;
   } else if (familyMatch) {
     resourceType = "family";
     resourceId = familyMatch[1];
-    eventName = request.method === "GET" ? "family_detail_viewed"
-      : request.method === "PATCH" ? "family_updated"
+    eventName = request.method === "PATCH" ? "family_updated"
       : request.method === "DELETE" ? "family_deleted"
-      : "family_action";
+      : undefined;
   } else if (url.pathname === "/api/families") {
-    eventName = request.method === "GET" ? "family_list_viewed"
-      : request.method === "POST" ? "family_created"
-      : "family_action";
+    eventName = request.method === "POST" ? "family_created" : undefined;
     resourceType = "family";
   } else if (adminUserMatch) {
     eventName = request.method === "PATCH" ? "user_updated"
       : request.method === "DELETE" ? "user_deleted"
-      : "user_action";
+      : undefined;
     resourceType = "user";
     resourceId = adminUserMatch[1];
   } else if (url.pathname === "/api/admin/users") {
-    eventName = request.method === "GET" ? "user_list_viewed"
-      : request.method === "POST" ? "user_created"
-      : "user_action";
+    eventName = request.method === "POST" ? "user_created" : undefined;
     resourceType = "user";
   }
+
+  if (!eventName) return;
 
   await recordAccessEvent(env, {
     user,
@@ -261,13 +238,4 @@ export async function listAccessEvents(
     })),
     total: total?.count || 0
   };
-}
-
-export async function hasRecentAnonymousPageView(env: Env, sessionId: string, route: string) {
-  return env.DB.prepare(
-    `SELECT id FROM access_events
-     WHERE user_id IS NULL AND event_name = 'page_view' AND session_id = ? AND route = ?
-       AND occurred_at >= datetime('now', '-30 seconds')
-     LIMIT 1`
-  ).bind(sessionId, route).first<{ id: string }>();
 }

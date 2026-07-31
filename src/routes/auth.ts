@@ -107,6 +107,18 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
     return jsonResponse(session);
   }
 
+  if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+    const user = await getAuthUser(request, env);
+    if (user) {
+      await recordAuthEvent(env, request, {
+        user,
+        eventName: "logout",
+        route: url.pathname
+      });
+    }
+    return jsonResponse({ loggedOut: true });
+  }
+
   if (request.method === "GET" && url.pathname === "/api/me") {
     await ensureDefaultUsers(env);
 

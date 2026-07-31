@@ -1,12 +1,9 @@
 import { badRequest, forbidden, jsonResponse } from "../http";
 import { getAuthUser } from "../services/auth";
-import { hasRecentAnonymousPageView, listAccessEvents, recordAccessEvent } from "../services/access-events";
+import { listAccessEvents, recordAccessEvent } from "../services/access-events";
 import type { Env } from "../types";
 
-const clientEvents = new Set([
-  "page_view", "task_detail_opened", "review_opened", "review_photo_switched",
-  "review_tool_selected", "review_undo", "review_cleared"
-]);
+const clientEvents = new Set(["task_detail_viewed"]);
 const sessionIdPattern = /^[a-zA-Z0-9_-]{8,80}$/;
 
 export async function handleAccessEvents(request: Request, env: Env, url: URL) {
@@ -21,14 +18,11 @@ export async function handleAccessEvents(request: Request, env: Env, url: URL) {
     } | null;
     if (!input?.eventName) return badRequest("eventName is required.");
     if (!clientEvents.has(input.eventName)) return badRequest("Unsupported client event.");
-    if (!user && input.eventName !== "page_view") return forbidden("登录后才能记录该事件。");
+    if (!user) return forbidden("登录后才能记录该事件。");
     const sessionId = request.headers.get("x-starbud-session-id") || "";
     if (!sessionIdPattern.test(sessionId)) return badRequest("Invalid access session.");
     const route = input.route?.trim() || "";
-    if (input.eventName === "page_view" && !route) return badRequest("route is required for page views.");
-    if (!user && input.eventName === "page_view" && await hasRecentAnonymousPageView(env, sessionId, route)) {
-      return jsonResponse({ recorded: false }, { status: 202 });
-    }
+    if (!route) return badRequest("route is required.");
 
     await recordAccessEvent(env, {
       user,

@@ -20,24 +20,6 @@ import {
   uploadSubmissionPhoto
 } from "../services/submissions";
 import type { Env } from "../types";
-import { recordAccessEvent } from "../services/access-events";
-
-async function recordAssetView(env: Env, request: Request, eventName: string, resourceId: string) {
-  try {
-    await recordAccessEvent(env, {
-      eventName,
-      clientType: request.headers.get("x-starbud-client") || "asset",
-      route: new URL(request.url).pathname,
-      resourceType: "submission_file",
-      resourceId,
-      metadata: { origin: "server" },
-      userAgent: request.headers.get("user-agent") || undefined,
-      sessionId: request.headers.get("x-starbud-session-id") || undefined
-    });
-  } catch (error) {
-    console.error("Failed to record submission asset view:", error);
-  }
-}
 
 export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const photoFileMatch = url.pathname.match(/^\/api\/submission-files\/([^/]+)$/);
@@ -52,8 +34,6 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     if (!result) {
       return notFound();
     }
-    await recordAssetView(env, request, "submission_photo_viewed", photoFileMatch[1]);
-
     const headers = new Headers({
       "access-control-allow-origin": "*",
       "cache-control": "private, max-age=3600",
@@ -69,8 +49,6 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     if (!result) {
       return notFound();
     }
-    await recordAssetView(env, request, "review_image_viewed", reviewFileMatch[1]);
-
     return new Response(result.object.body, {
       headers: {
         "access-control-allow-origin": "*",
@@ -84,21 +62,18 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   if (request.method === "GET" && reviewRoundFileMatch) {
     const result = await getReviewRoundImageObject(env, reviewRoundFileMatch[1], url.searchParams.get("token") || "");
     if (!result) return notFound();
-    await recordAssetView(env, request, "review_round_image_viewed", reviewRoundFileMatch[1]);
     return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
   }
 
   if (request.method === "GET" && reviewRoundResultImageMatch) {
     const result = await getReviewRoundResultImageObject(env, reviewRoundResultImageMatch[1], url.searchParams.get("token") || "");
     if (!result) return notFound();
-    await recordAssetView(env, request, "review_round_result_viewed", reviewRoundResultImageMatch[1]);
     return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
   }
 
   if (request.method === "GET" && reviewRoundPhotoMatch) {
     const result = await getReviewRoundPhotoObject(env, reviewRoundPhotoMatch[1], Number(reviewRoundPhotoMatch[2]), url.searchParams.get("token") || "");
     if (!result) return notFound();
-    await recordAssetView(env, request, "review_round_photo_viewed", reviewRoundPhotoMatch[1]);
     return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
   }
 
