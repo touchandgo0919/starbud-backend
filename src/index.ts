@@ -5,6 +5,7 @@ import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
 import { isAuthConfigured } from "./services/auth";
+import { sendDueClaimReminders } from "./services/tasks";
 import type { Env } from "./types";
 
 export default {
@@ -57,5 +58,9 @@ export default {
     }
 
     return notFound();
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(sendDueClaimReminders(env));
   }
 };

@@ -11,6 +11,7 @@ import {
   listTaskDefinitionsForUser,
   listTasksForUser,
   remindTaskForUser,
+  recordFinalVoiceReminderForUser,
   repairTaskStatusForUser,
   updateTaskForUser
 } from "../services/tasks";
@@ -88,6 +89,7 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   const completeMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/);
   const remindMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/remind$/);
   const statusMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/status$/);
+  const voiceCompletedMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/voice-reminder-completed$/);
 
   if (request.method === "POST" && completeMatch) {
     const input = (await request.json().catch(() => ({}))) as { taskDate?: string };
@@ -106,6 +108,16 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
       return task ? jsonResponse({ task }) : notFound();
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "提醒发送失败。");
+    }
+  }
+
+  if (request.method === "POST" && voiceCompletedMatch) {
+    const input = (await request.json().catch(() => ({}))) as { taskDate?: string };
+    try {
+      const task = await recordFinalVoiceReminderForUser(env, user, voiceCompletedMatch[1], input.taskDate);
+      return task ? jsonResponse({ task }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "语音完成状态写入失败。");
     }
   }
 

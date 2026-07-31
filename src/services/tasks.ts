@@ -117,6 +117,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     voiceEnabled: Boolean(row.voice_enable),
     voiceContent: row.voice_content?.trim() || row.title,
     voiceReminderCount: row.voice_reminder_count,
+    claimReminderEnabled: Boolean(row.claim_reminder_enabled),
     requiresPhotoUpload,
     status: taskStatus,
     occurrenceDate,
@@ -152,8 +153,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, require_photo_upload, start_date, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, require_photo_upload, start_date, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -164,6 +165,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.voiceEnabled ? 1 : 0,
       values.voiceContent,
       values.voiceReminderCount,
+      values.claimReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
       localTimestamp()
@@ -217,6 +219,7 @@ function validateTaskInput(env: Env, input: CreateTaskInput, fallbackStartDate =
     voiceEnabled: input.voiceEnabled !== false,
     voiceContent,
     voiceReminderCount,
+    claimReminderEnabled: input.voiceEnabled !== false && input.claimReminderEnabled === true,
     requiresPhotoUpload: input.requiresPhotoUpload !== false,
     startDate
   };
@@ -246,6 +249,7 @@ export async function updateTaskForUser(
       voice_enable = ?,
       voice_content = ?,
       voice_reminder_count = ?,
+      claim_reminder_enabled = ?,
       require_photo_upload = ?,
       start_date = ?
      WHERE id = ?
@@ -258,6 +262,7 @@ export async function updateTaskForUser(
       values.voiceEnabled ? 1 : 0,
       values.voiceContent,
       values.voiceReminderCount,
+      values.claimReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
       taskId
@@ -849,6 +854,82 @@ export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string
     .run();
 
   return task;
+}
+
+export async function recordFinalVoiceReminderForUser(
+  env: Env,
+  user: AuthUser,
+  taskId: string,
+  taskDate?: string
+) {
+  if (user.role !== "child") {
+    throw new Error("仅儿童设备可以确认语音提醒已播放完成。");
+  }
+
+  const childId = await childIdForUser(env, user);
+  const date = taskDate || todayKey(env);
+  const task = await getTaskById(env, taskId, date, true);
+  if (!task || task.childId !== childId || !task.claimReminderEnabled || task.claimedAt || task.status !== "pending") {
+    return null;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO task_claim_reminders (task_id, task_date, voice_completed_at, last_reminded_at)
+     VALUES (?, ?, ?, NULL)
+     ON CONFLICT(task_id, task_date)
+     DO UPDATE SET voice_completed_at = excluded.voice_completed_at, last_reminded_at = NULL`
+  ).bind(taskId, date, localTimestamp()).run();
+
+  return task;
+}
+
+export async function sendDueClaimReminders(env: Env) {
+  const now = localTimestamp();
+  const result = await env.DB.prepare(
+    `SELECT
+      task_claim_reminders.task_id,
+      task_claim_reminders.task_date,
+      tasks.child_id,
+      tasks.title,
+      children.child_user_id
+     FROM task_claim_reminders
+     INNER JOIN tasks ON tasks.id = task_claim_reminders.task_id
+     INNER JOIN children ON children.id = tasks.child_id
+     LEFT JOIN task_claims
+      ON task_claims.task_id = task_claim_reminders.task_id
+      AND task_claims.child_id = tasks.child_id
+      AND task_claims.task_date = task_claim_reminders.task_date
+     LEFT JOIN task_records
+      ON task_records.task_id = task_claim_reminders.task_id
+      AND task_records.date = task_claim_reminders.task_date
+     WHERE tasks.active = 1
+      AND tasks.claim_reminder_enabled = 1
+      AND children.child_user_id IS NOT NULL
+      AND task_claims.claimed_at IS NULL
+      AND COALESCE(task_records.status, 'pending') != 'completed'
+      AND datetime(task_claim_reminders.voice_completed_at, '+5 minutes') <= datetime(?)
+      AND (
+        task_claim_reminders.last_reminded_at IS NULL
+        OR datetime(task_claim_reminders.last_reminded_at, '+5 minutes') <= datetime(?)
+      )`
+  ).bind(now, now).all<{ task_id: string; task_date: string; child_id: string; title: string; child_user_id: string }>();
+
+  if (!result.results.length) return 0;
+
+  await env.DB.batch(result.results.flatMap((task) => [
+    env.DB.prepare(
+      `INSERT INTO notifications
+       (id, recipient_user_id, type, title, content, created_at)
+       VALUES (?, ?, 'claim_reminder', '星星芽AI助手 领取提醒', ?, ?)`
+    ).bind(randomId("notification"), task.child_user_id, `「${task.title}」还没有领取，请点击去领取。`, now),
+    env.DB.prepare(
+      `UPDATE task_claim_reminders
+       SET last_reminded_at = ?
+       WHERE task_id = ? AND task_date = ?`
+    ).bind(now, task.task_id, task.task_date)
+  ]));
+
+  return result.results.length;
 }
 
 export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {
