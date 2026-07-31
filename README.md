@@ -43,13 +43,16 @@ database_name = "starbud"
 database_id = "your-d1-database-id"
 ```
 
-Apply migrations locally:
+Apply migrations locally. Use the npm script so repeat runs skip existing
+columns safely:
 
 ```bash
 npm run d1:migrate:local
 ```
 
-Apply migrations to Cloudflare:
+Apply migrations to Cloudflare. Do not call `wrangler d1 migrations apply`
+directly for this project; SQLite/D1 cannot make `ALTER TABLE ADD COLUMN`
+idempotent in plain SQL, so the script checks schema first.
 
 ```bash
 npm run d1:migrate:remote

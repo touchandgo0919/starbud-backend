@@ -874,10 +874,10 @@ export async function recordFinalVoiceReminderForUser(
   }
 
   await env.DB.prepare(
-    `INSERT INTO task_claim_reminders (task_id, task_date, voice_completed_at, last_reminded_at)
-     VALUES (?, ?, ?, NULL)
+    `INSERT INTO task_claim_reminders (task_id, task_date, voice_completed_at, last_reminded_at, reminder_count)
+     VALUES (?, ?, ?, NULL, 0)
      ON CONFLICT(task_id, task_date)
-     DO UPDATE SET voice_completed_at = excluded.voice_completed_at, last_reminded_at = NULL`
+     DO UPDATE SET voice_completed_at = excluded.voice_completed_at, last_reminded_at = NULL, reminder_count = 0`
   ).bind(taskId, date, localTimestamp()).run();
 
   return task;
@@ -907,6 +907,7 @@ export async function sendDueClaimReminders(env: Env) {
       AND children.child_user_id IS NOT NULL
       AND task_claims.claimed_at IS NULL
       AND COALESCE(task_records.status, 'pending') != 'completed'
+      AND task_claim_reminders.reminder_count < 3
       AND datetime(task_claim_reminders.voice_completed_at, '+5 minutes') <= datetime(?)
       AND (
         task_claim_reminders.last_reminded_at IS NULL
@@ -923,9 +924,9 @@ export async function sendDueClaimReminders(env: Env) {
        VALUES (?, ?, 'claim_reminder', '星星芽AI助手 领取提醒', ?, ?)`
     ).bind(randomId("notification"), task.child_user_id, `「${task.title}」还没有领取，请点击去领取。`, now),
     env.DB.prepare(
-      `UPDATE task_claim_reminders
-       SET last_reminded_at = ?
-       WHERE task_id = ? AND task_date = ?`
+       `UPDATE task_claim_reminders
+       SET last_reminded_at = ?, reminder_count = reminder_count + 1
+       WHERE task_id = ? AND task_date = ? AND reminder_count < 3`
     ).bind(now, task.task_id, task.task_date)
   ]));
 

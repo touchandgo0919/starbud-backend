@@ -8,8 +8,8 @@
     "deploy": "node scripts/deploy.mjs",
     "deploy:wrangler": "wrangler deploy",
     "d1:create": "wrangler d1 create starbud",
-    "d1:migrate:local": "wrangler d1 migrations apply starbud --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply starbud --remote",
+    "d1:migrate:local": "node scripts/apply-idempotent-migrations.mjs local",
+    "d1:migrate:remote": "node scripts/apply-idempotent-migrations.mjs remote",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
