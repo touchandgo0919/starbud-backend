@@ -128,7 +128,9 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
       ? row.submission_status
       : null,
     reviewedAt: hasCurrentReview ? row.reviewed_at : null,
-    finalizedAt: hasCurrentFinalization ? row.finalized_at : null,
+    // 已完成后再次补交照片时，仍保留历史完成时间供统计使用；
+    // 本轮是否需要批改继续由 hasCurrentFinalization / reviewStatus 判断。
+    finalizedAt: row.finalized_at || null,
     needsRevision: hasCurrentReview && !hasCurrentFinalization,
     reviewStatus,
     submissionPhotoCount: row.submission_photo_count || 0,
