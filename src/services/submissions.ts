@@ -184,6 +184,26 @@ async function getSubmissionRow(env: Env, submissionId: string) {
     .first<SubmissionRow>();
 }
 
+async function getSubmissionRowForDeletion(env: Env, submissionId: string) {
+  return env.DB.prepare(
+    `SELECT
+      task_submissions.*,
+      COALESCE(tasks.title, '已删除任务') AS task_title,
+      COALESCE(tasks.schedule_time, '') AS schedule_time,
+      COALESCE(tasks.require_photo_upload, 1) AS require_photo_upload,
+      children.name AS child_name
+     FROM task_submissions
+     LEFT JOIN tasks
+      ON tasks.id = task_submissions.task_id
+     INNER JOIN children
+      ON children.id = task_submissions.child_id
+     WHERE task_submissions.id = ?
+     LIMIT 1`
+  )
+    .bind(submissionId)
+    .first<SubmissionRow>();
+}
+
 async function childIdForSubmissionUser(env: Env, user: AuthUser) {
   if (user.role !== "child") {
     throw new Error("仅儿童账号可以提交作业。");
@@ -665,7 +685,7 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
     throw new Error("仅家长或管理员可以删除提交。");
   }
 
-  const submission = await getSubmissionRow(env, submissionId);
+  const submission = await getSubmissionRowForDeletion(env, submissionId);
   if (!submission) return false;
   if (user.role !== "admin") {
     const children = await listChildren(env, user);
@@ -686,6 +706,12 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
   await env.DB.batch([
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare(
+      `DELETE FROM submission_review_images
+       WHERE review_round_id IN (
+         SELECT id FROM submission_review_rounds WHERE submission_id = ?
+       )`
+    ).bind(submissionId),
     env.DB.prepare("DELETE FROM submission_review_rounds WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submissions WHERE id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(submission.task_id, submission.task_date)
