@@ -3,7 +3,21 @@ import { ensureDefaultUsers } from "../db/seed";
 import { getAuthUser, isAuthConfigured, loginUser, signToken } from "../services/auth";
 import { listChildren } from "../services/children";
 import { registerParent } from "../services/users";
+import { recordAccessEvent } from "../services/access-events";
 import type { AuthUser, Env } from "../types";
+
+async function recordAuthEvent(env: Env, request: Request, input: Parameters<typeof recordAccessEvent>[1]) {
+  try {
+    await recordAccessEvent(env, {
+      ...input,
+      clientType: request.headers.get("x-starbud-client") || "web",
+      userAgent: request.headers.get("user-agent") || undefined,
+      sessionId: request.headers.get("x-starbud-session-id") || undefined
+    });
+  } catch (error) {
+    console.error("Failed to record auth access event:", error);
+  }
+}
 
 export async function handleAuth(request: Request, env: Env, url: URL) {
   if (
@@ -42,6 +56,12 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
         role: created.role
       };
 
+      await recordAuthEvent(env, request, {
+        user,
+        eventName: "parent_registered",
+        route: url.pathname
+      });
+
       return jsonResponse({ user, token: await signToken(env, user) }, { status: 201 });
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "注册失败。");
@@ -57,14 +77,32 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
     } | null;
 
     if (!input?.username || !input.password) {
+      await recordAuthEvent(env, request, {
+        eventName: "login_attempt",
+        route: url.pathname,
+        outcome: "failure",
+        metadata: { reason: "missing_credentials" }
+      });
       return badRequest("Username and password are required.");
     }
 
     const session = await loginUser(env, input.username.trim(), input.password);
 
     if (!session) {
+      await recordAuthEvent(env, request, {
+        eventName: "login_attempt",
+        route: url.pathname,
+        outcome: "failure",
+        metadata: { reason: "invalid_credentials" }
+      });
       return unauthorized("Invalid username or password.");
     }
+
+    await recordAuthEvent(env, request, {
+      user: session.user,
+      eventName: "login_succeeded",
+      route: url.pathname
+    });
 
     return jsonResponse(session);
   }

@@ -1,12 +1,23 @@
 import { emptyResponse, jsonResponse, notFound } from "./http";
 import { handleAuth } from "./routes/auth";
+import { handleAccessEvents } from "./routes/access-events";
 import { handleFamilies } from "./routes/families";
 import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
-import { isAuthConfigured } from "./services/auth";
+import { getAuthUser, isAuthConfigured } from "./services/auth";
+import { recordApiAccessEvent } from "./services/access-events";
 import { sendDueClaimReminders } from "./services/tasks";
 import type { Env } from "./types";
+
+async function trackedResponse(request: Request, env: Env, url: URL, response: Response) {
+  try {
+    await recordApiAccessEvent(env, request, url, response.status, await getAuthUser(request, env));
+  } catch (error) {
+    console.error("Failed to record access event:", error);
+  }
+  return response;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -30,31 +41,37 @@ export default {
     const authResponse = await handleAuth(request, env, url);
 
     if (authResponse) {
-      return authResponse;
+      return trackedResponse(request, env, url, authResponse);
+    }
+
+    const accessEventsResponse = await handleAccessEvents(request, env, url);
+
+    if (accessEventsResponse) {
+      return accessEventsResponse;
     }
 
     const familyResponse = await handleFamilies(request, env, url);
 
     if (familyResponse) {
-      return familyResponse;
+      return trackedResponse(request, env, url, familyResponse);
     }
 
     const userResponse = await handleUsers(request, env, url);
 
     if (userResponse) {
-      return userResponse;
+      return trackedResponse(request, env, url, userResponse);
     }
 
     const submissionResponse = await handleSubmissions(request, env, url);
 
     if (submissionResponse) {
-      return submissionResponse;
+      return trackedResponse(request, env, url, submissionResponse);
     }
 
     const taskResponse = await handleTasks(request, env, url);
 
     if (taskResponse) {
-      return taskResponse;
+      return trackedResponse(request, env, url, taskResponse);
     }
 
     return notFound();
