@@ -22,7 +22,19 @@ async function trackedResponse(request: Request, env: Env, url: URL, response: R
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
-      return emptyResponse({ status: 204 });
+      // 允许浏览器为客户端追踪附加 x-starbud-* 请求头，避免每次新增标识头都触发 CORS 失败。
+      const requestedClientHeaders = (request.headers.get("access-control-request-headers") || "")
+        .split(",")
+        .map((header) => header.trim().toLowerCase())
+        .filter((header) => /^x-starbud-[a-z0-9-]+$/.test(header));
+      const allowedHeaders = ["content-type", "authorization", ...requestedClientHeaders]
+        .filter((header, index, headers) => headers.indexOf(header) === index)
+        .join(",");
+
+      return emptyResponse({
+        status: 204,
+        headers: { "access-control-allow-headers": allowedHeaders }
+      });
     }
 
     const url = new URL(request.url);
