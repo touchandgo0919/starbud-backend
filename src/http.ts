@@ -3,7 +3,8 @@ const jsonHeaders = {
   "cache-control": "no-store",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-  "access-control-allow-headers": "content-type,authorization"
+  // 前端会用此请求头标识客户端类型；必须在预检响应中显式放行。
+  "access-control-allow-headers": "content-type,authorization,x-starbud-client"
 };
 
 export function jsonResponse(body: unknown, init: ResponseInit = {}) {
