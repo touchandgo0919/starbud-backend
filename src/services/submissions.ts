@@ -362,7 +362,8 @@ export async function submitReview(
   env: Env,
   user: AuthUser,
   submissionId: string,
-  inputImages: File[]
+  inputImages: File[],
+  replaceReviewImageId: string | null = null
 ) {
   if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长或管理员可以提交批改。");
@@ -398,6 +399,85 @@ export async function submitReview(
   }
 
   const reviewedAt = localTimestamp();
+
+  // 重新批改直接编辑已存在的批改图：更新指定图片，而不是追加新图片。
+  if (replaceReviewImageId) {
+    if (inputImages.length !== 1) {
+      throw new Error("重新批改时一次只能提交一张图片。");
+    }
+
+    const image = inputImages[0];
+    const accessToken = randomId("review-file");
+
+    if (replaceReviewImageId.startsWith("legacy-")) {
+      const roundId = replaceReviewImageId.slice("legacy-".length);
+      const round = await env.DB.prepare(
+        `SELECT * FROM submission_review_rounds
+         WHERE id = ? AND submission_id = ?
+         LIMIT 1`
+      ).bind(roundId, submissionId).first<ReviewRoundRow>();
+      if (!round) return null;
+
+      await env.SUBMISSION_FILES.put(round.review_object_key, image.stream(), {
+        httpMetadata: { contentType: image.type }
+      });
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE submission_review_rounds
+           SET review_access_token = ?, review_content_type = ?, reviewed_at = ?
+           WHERE id = ?`
+        ).bind(accessToken, image.type, reviewedAt, roundId),
+        env.DB.prepare(
+          `UPDATE task_submissions
+           SET review_id = ?, review_object_key = ?, review_access_token = ?,
+               review_content_type = ?, review_byte_size = ?, reviewed_at = ?
+           WHERE id = ?`
+        ).bind(submission.review_id || replaceReviewImageId, round.review_object_key, accessToken, image.type, image.size, reviewedAt, submissionId),
+        env.DB.prepare(
+          `INSERT INTO notifications
+           (id, recipient_user_id, submission_id, type, title, content, created_at)
+           VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
+        ).bind(randomId("notification"), recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+      ]);
+    } else {
+      const reviewImage = await env.DB.prepare(
+        `SELECT submission_review_images.*
+         FROM submission_review_images
+         INNER JOIN submission_review_rounds
+           ON submission_review_rounds.id = submission_review_images.review_round_id
+         WHERE submission_review_images.id = ?
+           AND submission_review_rounds.submission_id = ?
+         LIMIT 1`
+      ).bind(replaceReviewImageId, submissionId).first<ReviewRoundImageRow>();
+      if (!reviewImage) return null;
+
+      await env.SUBMISSION_FILES.put(reviewImage.object_key, image.stream(), {
+        httpMetadata: { contentType: image.type }
+      });
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE submission_review_images
+           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?
+           WHERE id = ?`
+        ).bind(accessToken, image.type, image.size, reviewedAt, replaceReviewImageId),
+        env.DB.prepare(
+          `UPDATE task_submissions
+           SET review_id = ?, review_object_key = ?, review_access_token = ?,
+               review_content_type = ?, review_byte_size = ?, reviewed_at = ?
+           WHERE id = ?`
+        ).bind(replaceReviewImageId, reviewImage.object_key, accessToken, image.type, image.size, reviewedAt, submissionId),
+        env.DB.prepare(
+          `INSERT INTO notifications
+           (id, recipient_user_id, submission_id, type, title, content, created_at)
+           VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
+        ).bind(randomId("notification"), recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+      ]);
+    }
+
+    const updated = await getSubmissionRow(env, submissionId);
+    return updated ? submissionDto(env, updated) : null;
+  }
+
   const photos = await getSubmissionPhotos(env, submissionId);
   const currentRound = submission.review_id
     ? await env.DB.prepare(

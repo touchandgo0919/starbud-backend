@@ -187,7 +187,14 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       if (!images.length) {
         return badRequest("请上传批改后的图片。");
       }
-      const submission = await submitReview(env, user, reviewMatch[1], images);
+      const replaceReviewImageId = formData?.get("replaceReviewImageId");
+      const submission = await submitReview(
+        env,
+        user,
+        reviewMatch[1],
+        images,
+        typeof replaceReviewImageId === "string" && replaceReviewImageId ? replaceReviewImageId : null
+      );
       return submission ? jsonResponse({ submission }) : notFound();
     }
 
