@@ -35,7 +35,7 @@ function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
 function audioDto(row: SubmissionAudioRow): SubmissionAudioDto {
   return {
     id: row.id,
-    url: `/api/submission-audio/${row.id}?token=${encodeURIComponent(row.access_token)}`,
+    url: `/api/submission-audio/${row.id}?token=${encodeURIComponent(row.access_token)}&v=${encodeURIComponent(row.created_at)}`,
     contentType: row.content_type,
     byteSize: row.byte_size,
     durationMs: row.duration_ms,
@@ -103,7 +103,7 @@ function reviewRoundAudios(round: ReviewRoundRow): SubmissionAudioDto[] {
   try {
     return (JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[]).map((audio, index) => ({
       id: audio.id,
-      url: `/api/review-round-audios/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}`,
+      url: `/api/review-round-audios/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}&v=${encodeURIComponent(audio.created_at)}`,
       contentType: audio.content_type,
       byteSize: audio.byte_size,
       durationMs: audio.duration_ms,

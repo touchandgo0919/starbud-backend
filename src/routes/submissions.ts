@@ -31,7 +31,7 @@ export function audioObjectResponse(object: R2ObjectBody, contentType: string) {
     "accept-ranges": "bytes",
     "access-control-allow-origin": "*",
     "access-control-expose-headers": "accept-ranges, content-length, content-range",
-    "cache-control": "private, max-age=3600",
+    "cache-control": "private, no-store",
     "content-type": contentType,
     etag: object.httpEtag
   });
