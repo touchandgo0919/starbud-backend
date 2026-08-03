@@ -1,5 +1,5 @@
 import type { AuthUser, Env } from "../types";
-import { randomId } from "../utils";
+import { localTimestamp, randomId } from "../utils";
 
 const maximumMetadataLength = 2_000;
 
@@ -52,8 +52,8 @@ export async function recordAccessEvent(env: Env, input: AccessEventInput) {
 
   await env.DB.prepare(
     `INSERT INTO access_events
-      (id, user_id, event_name, client_type, route, resource_type, resource_id, outcome, metadata_json, user_agent, session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, user_id, event_name, client_type, route, resource_type, resource_id, outcome, metadata_json, user_agent, session_id, occurred_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     randomId("access"),
     input.user?.id || null,
@@ -65,7 +65,8 @@ export async function recordAccessEvent(env: Env, input: AccessEventInput) {
     input.outcome === "failure" ? "failure" : "success",
     safeMetadata(input.metadata),
     text(input.userAgent, 240),
-    text(input.sessionId, 80)
+    text(input.sessionId, 80),
+    localTimestamp()
   ).run();
 }
 
@@ -179,7 +180,7 @@ export async function recordApiAccessEvent(
 
 export async function listAccessEvents(
   env: Env,
-  filters: { eventName?: string; clientType?: string; userId?: string; from?: string; to?: string; page: number; pageSize: number }
+  filters: { eventName?: string; clientType?: string; userName?: string; from?: string; to?: string; page: number; pageSize: number }
 ) {
   const clauses = ["1 = 1"];
   const values: string[] = [];
@@ -192,9 +193,11 @@ export async function listAccessEvents(
     clauses.push("access_events.client_type = ?");
     values.push(filters.clientType);
   }
-  if (filters.userId) {
-    clauses.push("access_events.user_id = ?");
-    values.push(filters.userId);
+  if (filters.userName?.trim()) {
+    const escapedName = filters.userName.trim().replace(/[\\%_]/g, "\\$&");
+    const namePattern = `%${escapedName}%`;
+    clauses.push("(users.display_name LIKE ? ESCAPE '\\' OR users.username LIKE ? ESCAPE '\\')");
+    values.push(namePattern, namePattern);
   }
   if (filters.from) {
     clauses.push("access_events.occurred_at >= ?");
@@ -220,7 +223,12 @@ export async function listAccessEvents(
       resource_type: string | null; resource_id: string | null; outcome: "success" | "failure";
       metadata_json: string; occurred_at: string; user_id: string | null; username: string | null; display_name: string | null;
     }>(),
-    env.DB.prepare(`SELECT COUNT(*) AS count FROM access_events WHERE ${where}`).bind(...values).first<{ count: number }>()
+    env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM access_events
+       LEFT JOIN users ON users.id = access_events.user_id
+       WHERE ${where}`
+    ).bind(...values).first<{ count: number }>()
   ]);
 
   return {

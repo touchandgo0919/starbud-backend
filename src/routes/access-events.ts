@@ -46,7 +46,7 @@ export async function handleAccessEvents(request: Request, env: Env, url: URL) {
     return jsonResponse(await listAccessEvents(env, {
       eventName: url.searchParams.get("eventName") || undefined,
       clientType: url.searchParams.get("clientType") || undefined,
-      userId: url.searchParams.get("userId") || undefined,
+      userName: url.searchParams.get("userName") || undefined,
       from: url.searchParams.get("from") || undefined,
       to: url.searchParams.get("to") || undefined,
       page,
