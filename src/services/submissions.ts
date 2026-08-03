@@ -188,6 +188,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
     photoCount: photos.length,
     photos: photos.map(photoDto),
     audio: audio ? audioDto(audio) : null,
+    audioFeedback: row.audio_feedback || "",
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
     reviewedAt: row.reviewed_at,
@@ -423,6 +424,19 @@ export async function uploadSubmissionAudio(
   return saved ? audioDto(saved) : null;
 }
 
+export async function deleteSubmissionAudio(env: Env, user: AuthUser, submissionId: string) {
+  const childId = await childIdForSubmissionUser(env, user);
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission || submission.child_id !== childId) return false;
+  if (submission.status !== "draft") throw new Error("作业已经提交，不能删除录音。");
+
+  const audio = await getSubmissionAudio(env, submissionId);
+  if (!audio) return false;
+  await env.DB.prepare("DELETE FROM task_submission_audios WHERE id = ?").bind(audio.id).run();
+  await env.SUBMISSION_FILES.delete(audio.object_key);
+  return true;
+}
+
 export async function finalizeSubmission(env: Env, user: AuthUser, submissionId: string) {
   const childId = await childIdForSubmissionUser(env, user);
   const submission = await getSubmissionRow(env, submissionId);
@@ -454,7 +468,7 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
      SET status = 'submitted', submitted_at = ?,
          review_id = NULL, review_object_key = NULL, review_access_token = NULL,
          review_content_type = NULL, review_byte_size = NULL,
-         reviewed_at = NULL, finalized_at = NULL
+         reviewed_at = NULL, finalized_at = NULL, audio_feedback = ''
      WHERE id = ? AND status = 'draft'`
   ).bind(submittedAt, submissionId).run();
 
@@ -675,6 +689,57 @@ export async function submitReview(
   return updated ? submissionDto(env, updated) : null;
 }
 
+export async function submitAudioReview(env: Env, user: AuthUser, submissionId: string, feedbackValue: string) {
+  if (user.role !== "parent" && user.role !== "admin") {
+    throw new Error("仅家长或管理员可以评价录音。");
+  }
+
+  const submission = await getSubmissionRow(env, submissionId);
+  if (!submission) return null;
+  if (submission.status !== "submitted") {
+    throw new Error("小朋友尚未提交作业，暂不能评价录音。");
+  }
+  if (submission.finalized_at) {
+    throw new Error("任务已完成，不能修改录音评价。");
+  }
+  if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) {
+    return null;
+  }
+  if (!await getSubmissionAudio(env, submissionId)) {
+    throw new Error("当前提交没有录音，无法评价。");
+  }
+
+  const feedback = feedbackValue.trim();
+  if (!feedback) throw new Error("请填写录音评价。");
+  if (feedback.length > 500) throw new Error("录音评价不能超过 500 个字。");
+
+  const recipient = await env.DB.prepare(
+    "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
+  ).bind(submission.child_id).first<{ child_user_id: string | null }>();
+  if (!recipient?.child_user_id) throw new Error("未找到儿童账号，无法发送通知。");
+
+  const reviewedAt = localTimestamp();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE task_submissions SET audio_feedback = ?, reviewed_at = ? WHERE id = ?"
+    ).bind(feedback, reviewedAt, submissionId),
+    env.DB.prepare(
+      `INSERT INTO notifications
+       (id, recipient_user_id, submission_id, type, title, content, created_at)
+       VALUES (?, ?, ?, 'review_completed', '录音评价已提交', ?, ?)`
+    ).bind(
+      randomId("notification"),
+      recipient.child_user_id,
+      submissionId,
+      `你的「${submission.task_title}」录音已收到评价，快去看看吧！`,
+      reviewedAt
+    )
+  ]);
+
+  const updated = await getSubmissionRow(env, submissionId);
+  return updated ? submissionDto(env, updated) : null;
+}
+
 export async function listSubmissions(
   env: Env,
   user: AuthUser,
@@ -887,7 +952,8 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
       `UPDATE task_submissions
        SET status = 'draft', note = '', submitted_at = NULL,
            review_id = NULL, review_object_key = NULL, review_access_token = NULL,
-           review_content_type = NULL, review_byte_size = NULL, reviewed_at = NULL, finalized_at = NULL
+           review_content_type = NULL, review_byte_size = NULL, reviewed_at = NULL, finalized_at = NULL,
+           audio_feedback = ''
        WHERE id = ?`
     ).bind(submissionId)
   ]);

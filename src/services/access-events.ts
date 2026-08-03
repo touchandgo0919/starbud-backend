@@ -82,7 +82,7 @@ export async function recordApiAccessEvent(
   }
 
   const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(claim|complete|remind|status|voice-reminder-completed))?$/);
-  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)(?:\/(photos|audio|submit|review|resubmit|finalize-review))?$/);
+  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)(?:\/(photos|audio|submit|review|audio-review|resubmit|finalize-review))?$/);
   const familyMemberMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/members\/([^/]+)$/);
   const familyMembersMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/members$/);
   const familyChildrenMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/children$/);
@@ -122,12 +122,13 @@ export async function recordApiAccessEvent(
     resourceType = "submission";
     resourceId = submissionMatch[1];
     const action = submissionMatch[2];
-    eventName = action === "audio" ? "submission_audio_uploaded"
+    eventName = action === "audio" && request.method === "POST" ? "submission_audio_uploaded"
       : action === "submit" ? "submission_submitted"
       : action === "review" ? "submission_review_submitted"
+      : action === "audio-review" ? "submission_audio_reviewed"
       : action === "resubmit" ? "submission_reopened"
       : action === "finalize-review" ? "submission_review_finalized"
-      : request.method === "DELETE" ? "submission_deleted"
+      : !action && request.method === "DELETE" ? "submission_deleted"
       : undefined;
   } else if (familyMemberMatch) {
     resourceType = "family_member";

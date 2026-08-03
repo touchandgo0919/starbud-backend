@@ -2,6 +2,7 @@ import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { getAuthUser } from "../services/auth";
 import {
   createSubmission,
+  deleteSubmissionAudio,
   deleteSubmission,
   finalizeSubmissionReview,
   finalizeSubmission,
@@ -16,6 +17,7 @@ import {
   listSubmissions,
   markNotificationRead,
   reopenSubmissionForResubmit,
+  submitAudioReview,
   submitReview,
   updateSubmissionNote,
   uploadSubmissionAudio,
@@ -99,6 +101,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const audioUploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/audio$/);
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
   const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
+  const audioReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/audio-review$/);
   const resubmitMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/resubmit$/);
   const finalizeReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/finalize-review$/);
   const deleteSubmissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
@@ -111,6 +114,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(audioUploadMatch)
     || Boolean(finalizeMatch)
     || Boolean(reviewMatch)
+    || Boolean(audioReviewMatch)
     || Boolean(resubmitMatch)
     || Boolean(finalizeReviewMatch)
     || Boolean(deleteSubmissionMatch)
@@ -198,6 +202,11 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       return uploaded ? jsonResponse({ audio: uploaded }, { status: 201 }) : notFound();
     }
 
+    if (request.method === "DELETE" && audioUploadMatch) {
+      const deleted = await deleteSubmissionAudio(env, user, audioUploadMatch[1]);
+      return deleted ? jsonResponse({ deleted: true }) : notFound();
+    }
+
     if (request.method === "POST" && finalizeMatch) {
       const submission = await finalizeSubmission(env, user, finalizeMatch[1]);
       return submission ? jsonResponse({ submission }) : notFound();
@@ -220,6 +229,13 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
         images,
         typeof replaceReviewImageId === "string" && replaceReviewImageId ? replaceReviewImageId : null
       );
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && audioReviewMatch) {
+      const input = (await request.json().catch(() => null)) as { feedback?: unknown } | null;
+      if (!input || typeof input.feedback !== "string") return badRequest("请填写录音评价。");
+      const submission = await submitAudioReview(env, user, audioReviewMatch[1], input.feedback);
       return submission ? jsonResponse({ submission }) : notFound();
     }
 

@@ -177,6 +177,7 @@ export interface SubmissionRow {
   review_byte_size: number | null;
   reviewed_at: string | null;
   finalized_at: string | null;
+  audio_feedback: string;
   task_title: string;
   schedule_time: string;
   require_photo_upload: number;
@@ -246,6 +247,7 @@ export interface SubmissionDto {
   photoCount: number;
   photos: SubmissionPhotoDto[];
   audio: SubmissionAudioDto | null;
+  audioFeedback: string;
   createdAt: string;
   submittedAt: string | null;
   reviewedAt: string | null;
