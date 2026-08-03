@@ -41,14 +41,23 @@ export function audioObjectResponse(object: R2ObjectBody, contentType: string) {
     return new Response(object.body, { status: 200, headers });
   }
 
+  const returnedRange = object.range as { offset?: number; length?: number; suffix?: number };
+  const rangeOffset = Number(returnedRange.offset);
+  const rangeLength = Number(returnedRange.length);
+  const rangeSuffix = Number(returnedRange.suffix);
   let offset = 0;
   let length = object.size;
-  if ("suffix" in object.range) {
-    length = Math.min(object.size, object.range.suffix);
+
+  // R2's returned range object exposes all optional keys at runtime. Checking
+  // `"suffix" in range` therefore also matches offset ranges whose suffix is
+  // undefined, which previously produced `bytes NaN-NaN/...` and prevented
+  // browsers from loading audio metadata.
+  if (Number.isFinite(rangeOffset) && Number.isFinite(rangeLength)) {
+    offset = Math.max(0, rangeOffset);
+    length = Math.min(Math.max(0, rangeLength), Math.max(0, object.size - offset));
+  } else if (Number.isFinite(rangeSuffix)) {
+    length = Math.min(object.size, Math.max(0, rangeSuffix));
     offset = object.size - length;
-  } else {
-    offset = object.range.offset || 0;
-    length = object.range.length || Math.max(0, object.size - offset);
   }
   headers.set("content-length", String(length));
   headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);

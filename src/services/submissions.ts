@@ -176,7 +176,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
       note: row.note,
       feedback: "",
       photos: photos.map(photoDto),
-      audios: [],
+      audios: audio ? [audioDto(audio)] : [],
       reviewImages: [{
         id: `legacy-${row.id}`,
         url: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
