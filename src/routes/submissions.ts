@@ -26,6 +26,35 @@ import {
 } from "../services/submissions";
 import type { Env } from "../types";
 
+export function audioObjectResponse(object: R2ObjectBody, contentType: string) {
+  const headers = new Headers({
+    "accept-ranges": "bytes",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "accept-ranges, content-length, content-range",
+    "cache-control": "private, max-age=3600",
+    "content-type": contentType,
+    etag: object.httpEtag
+  });
+
+  if (!object.range) {
+    headers.set("content-length", String(object.size));
+    return new Response(object.body, { status: 200, headers });
+  }
+
+  let offset = 0;
+  let length = object.size;
+  if ("suffix" in object.range) {
+    length = Math.min(object.size, object.range.suffix);
+    offset = object.size - length;
+  } else {
+    offset = object.range.offset || 0;
+    length = object.range.length || Math.max(0, object.size - offset);
+  }
+  headers.set("content-length", String(length));
+  headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+  return new Response(object.body, { status: 206, headers });
+}
+
 export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const photoFileMatch = url.pathname.match(/^\/api\/submission-files\/([^/]+)$/);
   const audioFileMatch = url.pathname.match(/^\/api\/submission-audio\/([^/]+)$/);
@@ -51,16 +80,14 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "GET" && audioFileMatch) {
-    const result = await getSubmissionAudioObject(env, audioFileMatch[1], url.searchParams.get("token") || "");
+    const result = await getSubmissionAudioObject(
+      env,
+      audioFileMatch[1],
+      url.searchParams.get("token") || "",
+      request.headers
+    );
     if (!result) return notFound();
-    return new Response(result.object.body, {
-      headers: {
-        "access-control-allow-origin": "*",
-        "cache-control": "private, max-age=3600",
-        "content-type": result.audio.content_type,
-        etag: result.object.httpEtag
-      }
-    });
+    return audioObjectResponse(result.object, result.audio.content_type);
   }
 
   if (request.method === "GET" && reviewFileMatch) {
@@ -98,9 +125,15 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "GET" && reviewRoundAudioMatch) {
-    const result = await getReviewRoundAudioObject(env, reviewRoundAudioMatch[1], Number(reviewRoundAudioMatch[2]), url.searchParams.get("token") || "");
+    const result = await getReviewRoundAudioObject(
+      env,
+      reviewRoundAudioMatch[1],
+      Number(reviewRoundAudioMatch[2]),
+      url.searchParams.get("token") || "",
+      request.headers
+    );
     if (!result) return notFound();
-    return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
+    return audioObjectResponse(result.object, result.contentType);
   }
 
   const createMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submissions$/);

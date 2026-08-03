@@ -1116,7 +1116,8 @@ export async function getSubmissionPhotoObject(
 export async function getSubmissionAudioObject(
   env: Env,
   audioId: string,
-  accessToken: string
+  accessToken: string,
+  rangeHeaders?: Headers
 ) {
   const audio = await env.DB.prepare(
     `SELECT * FROM task_submission_audios
@@ -1124,7 +1125,10 @@ export async function getSubmissionAudioObject(
      LIMIT 1`
   ).bind(audioId, accessToken).first<SubmissionAudioRow>();
   if (!audio) return null;
-  const object = await env.SUBMISSION_FILES.get(audio.object_key);
+  const object = await env.SUBMISSION_FILES.get(
+    audio.object_key,
+    rangeHeaders ? { range: rangeHeaders } : undefined
+  );
   return object ? { object, audio } : null;
 }
 
@@ -1181,7 +1185,13 @@ export async function getReviewRoundPhotoObject(env: Env, roundId: string, photo
   return object ? { object, contentType: selected.content_type || "image/jpeg" } : null;
 }
 
-export async function getReviewRoundAudioObject(env: Env, roundId: string, audioIndex: number, accessToken: string) {
+export async function getReviewRoundAudioObject(
+  env: Env,
+  roundId: string,
+  audioIndex: number,
+  accessToken: string,
+  rangeHeaders?: Headers
+) {
   const round = await getReviewRound(env, roundId, accessToken);
   if (!round) return null;
   let audios: SubmissionAudioRow[];
@@ -1192,6 +1202,9 @@ export async function getReviewRoundAudioObject(env: Env, roundId: string, audio
   }
   const selected = audios[audioIndex];
   if (!selected) return null;
-  const object = await env.SUBMISSION_FILES.get(selected.object_key);
+  const object = await env.SUBMISSION_FILES.get(
+    selected.object_key,
+    rangeHeaders ? { range: rangeHeaders } : undefined
+  );
   return object ? { object, contentType: selected.content_type || "audio/mpeg" } : null;
 }
