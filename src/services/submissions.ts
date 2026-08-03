@@ -67,6 +67,7 @@ interface ReviewRoundRow {
   submission_id: string;
   sequence: number;
   note: string;
+  review_feedback: string;
   photos_json: string;
   audio_json: string;
   review_object_key: string;
@@ -100,7 +101,14 @@ function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
 
 function reviewRoundAudios(round: ReviewRoundRow): SubmissionAudioDto[] {
   try {
-    return (JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[]).map(audioDto);
+    return (JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[]).map((audio, index) => ({
+      id: audio.id,
+      url: `/api/review-round-audios/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}`,
+      contentType: audio.content_type,
+      byteSize: audio.byte_size,
+      durationMs: audio.duration_ms,
+      createdAt: audio.created_at
+    }));
   } catch {
     return [];
   }
@@ -113,6 +121,7 @@ async function reviewRoundImages(env: Env, round: ReviewRoundRow): Promise<Submi
      ORDER BY sequence ASC`
   ).bind(round.id).all<ReviewRoundImageRow>();
   if (!result.results.length) {
+    if (!round.review_object_key || !round.review_access_token) return [];
     return [{
       id: `legacy-${round.id}`,
       url: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
@@ -141,10 +150,13 @@ async function getSubmissionReviewRounds(env: Env, submissionId: string): Promis
     id: round.id,
     sequence: round.sequence,
     note: round.note,
+    feedback: round.review_feedback || "",
     photos: reviewRoundPhotos(round),
     audios: reviewRoundAudios(round),
     reviewImages: await reviewRoundImages(env, round),
-    reviewImageUrl: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
+    reviewImageUrl: round.review_object_key
+      ? `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`
+      : "",
     submittedAt: round.submitted_at,
     reviewedAt: round.reviewed_at
   })));
@@ -162,6 +174,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
       id: `legacy-${row.id}`,
       sequence: 1,
       note: row.note,
+      feedback: "",
       photos: photos.map(photoDto),
       audios: [],
       reviewImages: [{
@@ -705,7 +718,8 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) {
     return null;
   }
-  if (!await getSubmissionAudio(env, submissionId)) {
+  const audio = await getSubmissionAudio(env, submissionId);
+  if (!audio) {
     throw new Error("当前提交没有录音，无法评价。");
   }
 
@@ -719,10 +733,33 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
   if (!recipient?.child_user_id) throw new Error("未找到儿童账号，无法发送通知。");
 
   const reviewedAt = localTimestamp();
+  const photos = await getSubmissionPhotos(env, submissionId);
+  const nextSequence = (await env.DB.prepare(
+    "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM submission_review_rounds WHERE submission_id = ?"
+  ).bind(submissionId).first<{ sequence: number }>())?.sequence || 1;
+  const roundId = randomId("round");
+  const roundAccessToken = randomId("review-round");
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE task_submissions SET audio_feedback = ?, reviewed_at = ? WHERE id = ?"
     ).bind(feedback, reviewedAt, submissionId),
+    env.DB.prepare(
+      `INSERT INTO submission_review_rounds
+       (id, submission_id, sequence, note, review_feedback, photos_json, audio_json,
+        review_object_key, review_access_token, review_content_type, submitted_at, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, '', ?, ?)`
+    ).bind(
+      roundId,
+      submissionId,
+      nextSequence,
+      submission.note,
+      feedback,
+      JSON.stringify(photos),
+      JSON.stringify([audio]),
+      roundAccessToken,
+      submission.submitted_at,
+      reviewedAt
+    ),
     env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content, created_at)
@@ -924,21 +961,23 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
   ).bind(submissionId).first<{ id: string }>();
   const photos = await getSubmissionPhotos(env, submissionId);
   const audio = await getSubmissionAudio(env, submissionId);
-  const legacyRoundStatement = !existingRound && submission.review_id && submission.review_object_key
-    && submission.review_access_token && submission.review_content_type
+  const legacyRoundStatement = !existingRound && (Boolean(submission.review_id && submission.review_object_key
+    && submission.review_access_token && submission.review_content_type) || Boolean(submission.audio_feedback))
     ? env.DB.prepare(
       `INSERT INTO submission_review_rounds
-       (id, submission_id, sequence, note, photos_json, audio_json, review_object_key, review_access_token, review_content_type, reviewed_at)
-       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
+       (id, submission_id, sequence, note, review_feedback, photos_json, audio_json,
+        review_object_key, review_access_token, review_content_type, reviewed_at)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       randomId("round"),
       submissionId,
       submission.note,
+      submission.audio_feedback,
       JSON.stringify(photos),
       JSON.stringify(audio ? [audio] : []),
-      submission.review_object_key,
-      submission.review_access_token,
-      submission.review_content_type,
+      submission.review_object_key || "",
+      submission.review_access_token || randomId("review-round"),
+      submission.review_content_type || "",
       submission.reviewed_at
     )
     : null;
@@ -1116,7 +1155,7 @@ async function getReviewRound(env: Env, roundId: string, accessToken: string) {
 
 export async function getReviewRoundImageObject(env: Env, roundId: string, accessToken: string) {
   const round = await getReviewRound(env, roundId, accessToken);
-  if (!round) return null;
+  if (!round?.review_object_key) return null;
   const object = await env.SUBMISSION_FILES.get(round.review_object_key);
   return object ? { object, contentType: round.review_content_type || "image/png" } : null;
 }
@@ -1140,4 +1179,19 @@ export async function getReviewRoundPhotoObject(env: Env, roundId: string, photo
   if (!selected) return null;
   const object = await env.SUBMISSION_FILES.get(selected.object_key);
   return object ? { object, contentType: selected.content_type || "image/jpeg" } : null;
+}
+
+export async function getReviewRoundAudioObject(env: Env, roundId: string, audioIndex: number, accessToken: string) {
+  const round = await getReviewRound(env, roundId, accessToken);
+  if (!round) return null;
+  let audios: SubmissionAudioRow[];
+  try {
+    audios = JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[];
+  } catch {
+    return null;
+  }
+  const selected = audios[audioIndex];
+  if (!selected) return null;
+  const object = await env.SUBMISSION_FILES.get(selected.object_key);
+  return object ? { object, contentType: selected.content_type || "audio/mpeg" } : null;
 }

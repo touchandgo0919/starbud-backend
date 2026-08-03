@@ -226,6 +226,7 @@ export interface SubmissionReviewRoundDto {
   id: string;
   sequence: number;
   note: string;
+  feedback: string;
   photos: SubmissionPhotoDto[];
   audios: SubmissionAudioDto[];
   reviewImages: SubmissionPhotoDto[];

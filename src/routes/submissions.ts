@@ -9,6 +9,7 @@ import {
   getTaskSubmissionForUser,
   getReviewImageObject,
   getReviewRoundImageObject,
+  getReviewRoundAudioObject,
   getReviewRoundResultImageObject,
   getReviewRoundPhotoObject,
   getSubmissionAudioObject,
@@ -32,6 +33,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const reviewRoundFileMatch = url.pathname.match(/^\/api\/review-round-files\/([^/]+)$/);
   const reviewRoundResultImageMatch = url.pathname.match(/^\/api\/review-round-images\/([^/]+)$/);
   const reviewRoundPhotoMatch = url.pathname.match(/^\/api\/review-round-photos\/([^/]+)\/(\d+)$/);
+  const reviewRoundAudioMatch = url.pathname.match(/^\/api\/review-round-audios\/([^/]+)\/(\d+)$/);
 
   if (request.method === "GET" && photoFileMatch) {
     const accessToken = url.searchParams.get("token") || "";
@@ -91,6 +93,12 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
   if (request.method === "GET" && reviewRoundPhotoMatch) {
     const result = await getReviewRoundPhotoObject(env, reviewRoundPhotoMatch[1], Number(reviewRoundPhotoMatch[2]), url.searchParams.get("token") || "");
+    if (!result) return notFound();
+    return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
+  }
+
+  if (request.method === "GET" && reviewRoundAudioMatch) {
+    const result = await getReviewRoundAudioObject(env, reviewRoundAudioMatch[1], Number(reviewRoundAudioMatch[2]), url.searchParams.get("token") || "");
     if (!result) return notFound();
     return new Response(result.object.body, { headers: { "access-control-allow-origin": "*", "cache-control": "private, max-age=3600", "content-type": result.contentType, etag: result.object.httpEtag } });
   }
