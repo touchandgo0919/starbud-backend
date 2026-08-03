@@ -5,6 +5,8 @@ import type {
   NotificationDto,
   NotificationRow,
   SubmissionDto,
+  SubmissionAudioDto,
+  SubmissionAudioRow,
   SubmissionPhotoDto,
   SubmissionPhotoRow,
   SubmissionReviewRoundDto,
@@ -16,6 +18,9 @@ import { getTaskById, todayKey } from "./tasks";
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const maxPhotoBytes = 10 * 1024 * 1024;
 const maxPhotoCount = 8;
+const allowedAudioTypes = new Set(["audio/mpeg", "audio/mp3", "audio/mp4", "audio/aac", "audio/webm"]);
+const maxAudioBytes = 5 * 1024 * 1024;
+const maxAudioDurationMs = 3 * 60 * 1000;
 
 function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
   return {
@@ -23,6 +28,17 @@ function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
     url: `/api/submission-files/${row.id}?token=${encodeURIComponent(row.access_token)}`,
     contentType: row.content_type,
     byteSize: row.byte_size,
+    createdAt: row.created_at
+  };
+}
+
+function audioDto(row: SubmissionAudioRow): SubmissionAudioDto {
+  return {
+    id: row.id,
+    url: `/api/submission-audio/${row.id}?token=${encodeURIComponent(row.access_token)}`,
+    contentType: row.content_type,
+    byteSize: row.byte_size,
+    durationMs: row.duration_ms,
     createdAt: row.created_at
   };
 }
@@ -40,12 +56,19 @@ async function getSubmissionPhotos(env: Env, submissionId: string) {
   return result.results;
 }
 
+async function getSubmissionAudio(env: Env, submissionId: string) {
+  return env.DB.prepare(
+    "SELECT * FROM task_submission_audios WHERE submission_id = ? LIMIT 1"
+  ).bind(submissionId).first<SubmissionAudioRow>();
+}
+
 interface ReviewRoundRow {
   id: string;
   submission_id: string;
   sequence: number;
   note: string;
   photos_json: string;
+  audio_json: string;
   review_object_key: string;
   review_access_token: string;
   review_content_type: string;
@@ -73,6 +96,14 @@ function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
     byteSize: photo.byte_size,
     createdAt: photo.created_at
   }));
+}
+
+function reviewRoundAudios(round: ReviewRoundRow): SubmissionAudioDto[] {
+  try {
+    return (JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[]).map(audioDto);
+  } catch {
+    return [];
+  }
 }
 
 async function reviewRoundImages(env: Env, round: ReviewRoundRow): Promise<SubmissionPhotoDto[]> {
@@ -111,6 +142,7 @@ async function getSubmissionReviewRounds(env: Env, submissionId: string): Promis
     sequence: round.sequence,
     note: round.note,
     photos: reviewRoundPhotos(round),
+    audios: reviewRoundAudios(round),
     reviewImages: await reviewRoundImages(env, round),
     reviewImageUrl: `/api/review-round-files/${round.id}?token=${encodeURIComponent(round.review_access_token)}`,
     submittedAt: round.submitted_at,
@@ -120,6 +152,7 @@ async function getSubmissionReviewRounds(env: Env, submissionId: string): Promis
 
 async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDto> {
   const photos = await getSubmissionPhotos(env, row.id);
+  const audio = await getSubmissionAudio(env, row.id);
   const savedReviewRounds = await getSubmissionReviewRounds(env, row.id);
   // 0009 迁移前的批改仅保存了最后一张批改图。将其转换为首轮记录，
   // 让历史任务也能使用统一的分组详情布局。
@@ -130,6 +163,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
       sequence: 1,
       note: row.note,
       photos: photos.map(photoDto),
+      audios: [],
       reviewImages: [{
         id: `legacy-${row.id}`,
         url: `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`,
@@ -153,6 +187,7 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
     status: row.status,
     photoCount: photos.length,
     photos: photos.map(photoDto),
+    audio: audio ? audioDto(audio) : null,
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
     reviewedAt: row.reviewed_at,
@@ -236,7 +271,7 @@ export async function createSubmission(
     return null;
   }
   if (!task.requiresPhotoUpload) {
-    throw new Error("该任务无需上传照片，领取后请等待家长确认。");
+    throw new Error("该任务无需提交附件，领取后请等待家长确认。");
   }
 
   const id = randomId("submission");
@@ -288,7 +323,7 @@ export async function uploadSubmissionPhoto(
     return null;
   }
   if (!submission.require_photo_upload) {
-    throw new Error("该任务无需上传照片，领取后请等待家长确认。");
+    throw new Error("该任务无需提交附件，领取后请等待家长确认。");
   }
   if (submission.status !== "draft") {
     throw new Error("作业已经提交，不能继续添加照片。");
@@ -340,6 +375,54 @@ export async function uploadSubmissionPhoto(
   return row ? photoDto(row) : null;
 }
 
+export async function uploadSubmissionAudio(
+  env: Env,
+  user: AuthUser,
+  submissionId: string,
+  audio: File,
+  durationMs: number
+) {
+  const childId = await childIdForSubmissionUser(env, user);
+  const submission = await getSubmissionRow(env, submissionId);
+
+  if (!submission || submission.child_id !== childId) return null;
+  if (!submission.require_photo_upload) throw new Error("该任务无需提交附件，领取后请等待家长确认。");
+  if (submission.status !== "draft") throw new Error("作业已经提交，不能继续修改录音。");
+  if (!allowedAudioTypes.has(audio.type)) throw new Error("仅支持 MP3、M4A、AAC 或 WebM 录音。");
+  if (!audio.size || audio.size > maxAudioBytes) throw new Error("录音文件不能超过 5MB。");
+  if (!Number.isInteger(durationMs) || durationMs < 1_000 || durationMs > maxAudioDurationMs) {
+    throw new Error("录音时长需在 1 秒到 3 分钟之间。");
+  }
+
+  const previous = await getSubmissionAudio(env, submissionId);
+  const id = randomId("audio");
+  const objectKey = `submissions/${childId}/${submissionId}/${id}`;
+  const accessToken = randomId("audio-file");
+
+  await env.SUBMISSION_FILES.put(objectKey, audio.stream(), {
+    httpMetadata: { contentType: audio.type }
+  });
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM task_submission_audios WHERE submission_id = ?").bind(submissionId),
+      env.DB.prepare(
+        `INSERT INTO task_submission_audios
+          (id, submission_id, object_key, access_token, content_type, byte_size, duration_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, submissionId, objectKey, accessToken, audio.type, audio.size, durationMs, localTimestamp())
+    ]);
+  } catch (error) {
+    await env.SUBMISSION_FILES.delete(objectKey);
+    throw error;
+  }
+
+  if (previous) await env.SUBMISSION_FILES.delete(previous.object_key);
+  const saved = await env.DB.prepare("SELECT * FROM task_submission_audios WHERE id = ? LIMIT 1")
+    .bind(id).first<SubmissionAudioRow>();
+  return saved ? audioDto(saved) : null;
+}
+
 export async function finalizeSubmission(env: Env, user: AuthUser, submissionId: string) {
   const childId = await childIdForSubmissionUser(env, user);
   const submission = await getSubmissionRow(env, submissionId);
@@ -348,7 +431,7 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
     return null;
   }
   if (!submission.require_photo_upload) {
-    throw new Error("该任务无需上传照片，不能提交作业。");
+    throw new Error("该任务无需提交附件，不能提交作业。");
   }
   if (submission.status === "submitted") {
     return submissionDto(env, submission);
@@ -360,8 +443,9 @@ export async function finalizeSubmission(env: Env, user: AuthUser, submissionId:
     .bind(submissionId)
     .first<{ count: number }>();
 
-  if (!photoCount?.count) {
-    throw new Error("请至少上传一张作业照片。");
+  const audio = await getSubmissionAudio(env, submissionId);
+  if (!photoCount?.count && !audio) {
+    throw new Error("请至少提交一张照片或一段录音。");
   }
 
   const submittedAt = localTimestamp();
@@ -499,6 +583,7 @@ export async function submitReview(
   }
 
   const photos = await getSubmissionPhotos(env, submissionId);
+  const audio = await getSubmissionAudio(env, submissionId);
   const currentRound = submission.review_id
     ? await env.DB.prepare(
       `SELECT * FROM submission_review_rounds
@@ -544,14 +629,15 @@ export async function submitReview(
     ),
     ...(currentRound ? [] : [env.DB.prepare(
       `INSERT INTO submission_review_rounds
-       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, submitted_at, reviewed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, submission_id, sequence, note, photos_json, audio_json, review_object_key, review_access_token, review_content_type, submitted_at, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       roundId,
       submissionId,
       nextSequence,
       submission.note,
       JSON.stringify(photos),
+      JSON.stringify(audio ? [audio] : []),
       latestImage.objectKey,
       latestImage.accessToken,
       latestImage.image.type,
@@ -693,6 +779,7 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
   }
 
   const photos = await getSubmissionPhotos(env, submissionId);
+  const audio = await getSubmissionAudio(env, submissionId);
   const reviewRounds = await env.DB.prepare(
     "SELECT * FROM submission_review_rounds WHERE submission_id = ?"
   ).bind(submissionId).all<ReviewRoundRow>();
@@ -706,6 +793,7 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
   await env.DB.batch([
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_submission_audios WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare(
       `DELETE FROM submission_review_images
        WHERE review_round_id IN (
@@ -719,9 +807,17 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
 
   await Promise.all([
     ...photos.map((photo) => env.SUBMISSION_FILES.delete(photo.object_key)),
+    ...(audio ? [env.SUBMISSION_FILES.delete(audio.object_key)] : []),
     ...reviewRounds.results.flatMap((round) => {
       try {
         return (JSON.parse(round.photos_json) as SubmissionPhotoRow[]).map((photo) => env.SUBMISSION_FILES.delete(photo.object_key));
+      } catch {
+        return [];
+      }
+    }),
+    ...reviewRounds.results.flatMap((round) => {
+      try {
+        return (JSON.parse(round.audio_json || "[]") as SubmissionAudioRow[]).map((item) => env.SUBMISSION_FILES.delete(item.object_key));
       } catch {
         return [];
       }
@@ -753,7 +849,7 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission || submission.child_id !== childId || submission.status !== "submitted" || !submission.reviewed_at) return null;
   if (!submission.require_photo_upload) {
-    throw new Error("该任务已改为无需上传照片，不能重新提交。");
+    throw new Error("该任务已改为无需提交附件，不能重新提交。");
   }
 
   // 兼容轮次表上线前的旧提交：儿童第一次重新提交时，先固化旧的原图、批改图与备注。
@@ -762,17 +858,19 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
     "SELECT id FROM submission_review_rounds WHERE submission_id = ? LIMIT 1"
   ).bind(submissionId).first<{ id: string }>();
   const photos = await getSubmissionPhotos(env, submissionId);
+  const audio = await getSubmissionAudio(env, submissionId);
   const legacyRoundStatement = !existingRound && submission.review_id && submission.review_object_key
     && submission.review_access_token && submission.review_content_type
     ? env.DB.prepare(
       `INSERT INTO submission_review_rounds
-       (id, submission_id, sequence, note, photos_json, review_object_key, review_access_token, review_content_type, reviewed_at)
-       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`
+       (id, submission_id, sequence, note, photos_json, audio_json, review_object_key, review_access_token, review_content_type, reviewed_at)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       randomId("round"),
       submissionId,
       submission.note,
       JSON.stringify(photos),
+      JSON.stringify(audio ? [audio] : []),
       submission.review_object_key,
       submission.review_access_token,
       submission.review_content_type,
@@ -784,6 +882,7 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
     ...(legacyRoundStatement ? [legacyRoundStatement] : []),
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare("DELETE FROM task_submission_audios WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare(
       `UPDATE task_submissions
        SET status = 'draft', note = '', submitted_at = NULL,
@@ -802,13 +901,14 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
   if (!submission) return null;
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) return null;
   if (submission.status !== "submitted") {
-    throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
+    throw new Error("小朋友尚未提交附件，暂不能关闭任务。");
   }
   const photoCount = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM task_submission_photos WHERE submission_id = ?"
   ).bind(submissionId).first<{ count: number }>();
-  if (!photoCount?.count) {
-    throw new Error("小朋友尚未提交照片，暂不能关闭任务。");
+  const audio = await getSubmissionAudio(env, submissionId);
+  if (!photoCount?.count && !audio) {
+    throw new Error("小朋友尚未提交附件，暂不能关闭任务。");
   }
   const closedAt = localTimestamp();
   const recipient = await env.DB.prepare(
@@ -906,6 +1006,21 @@ export async function getSubmissionPhotoObject(
 
   const object = await env.SUBMISSION_FILES.get(photo.object_key);
   return object ? { object, photo } : null;
+}
+
+export async function getSubmissionAudioObject(
+  env: Env,
+  audioId: string,
+  accessToken: string
+) {
+  const audio = await env.DB.prepare(
+    `SELECT * FROM task_submission_audios
+     WHERE id = ? AND access_token = ?
+     LIMIT 1`
+  ).bind(audioId, accessToken).first<SubmissionAudioRow>();
+  if (!audio) return null;
+  const object = await env.SUBMISSION_FILES.get(audio.object_key);
+  return object ? { object, audio } : null;
 }
 
 export async function getReviewImageObject(env: Env, reviewId: string, accessToken: string) {

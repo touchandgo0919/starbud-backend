@@ -82,7 +82,7 @@ export async function recordApiAccessEvent(
   }
 
   const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(claim|complete|remind|status|voice-reminder-completed))?$/);
-  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)(?:\/(photos|submit|review|resubmit|finalize-review))?$/);
+  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)(?:\/(photos|audio|submit|review|resubmit|finalize-review))?$/);
   const familyMemberMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/members\/([^/]+)$/);
   const familyMembersMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/members$/);
   const familyChildrenMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/children$/);
@@ -122,7 +122,8 @@ export async function recordApiAccessEvent(
     resourceType = "submission";
     resourceId = submissionMatch[1];
     const action = submissionMatch[2];
-    eventName = action === "submit" ? "submission_submitted"
+    eventName = action === "audio" ? "submission_audio_uploaded"
+      : action === "submit" ? "submission_submitted"
       : action === "review" ? "submission_review_submitted"
       : action === "resubmit" ? "submission_reopened"
       : action === "finalize-review" ? "submission_review_finalized"

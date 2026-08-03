@@ -10,6 +10,7 @@ import {
   getReviewRoundImageObject,
   getReviewRoundResultImageObject,
   getReviewRoundPhotoObject,
+  getSubmissionAudioObject,
   getSubmissionPhotoObject,
   listNotifications,
   listSubmissions,
@@ -17,12 +18,14 @@ import {
   reopenSubmissionForResubmit,
   submitReview,
   updateSubmissionNote,
+  uploadSubmissionAudio,
   uploadSubmissionPhoto
 } from "../services/submissions";
 import type { Env } from "../types";
 
 export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const photoFileMatch = url.pathname.match(/^\/api\/submission-files\/([^/]+)$/);
+  const audioFileMatch = url.pathname.match(/^\/api\/submission-audio\/([^/]+)$/);
   const reviewFileMatch = url.pathname.match(/^\/api\/review-files\/([^/]+)$/);
   const reviewRoundFileMatch = url.pathname.match(/^\/api\/review-round-files\/([^/]+)$/);
   const reviewRoundResultImageMatch = url.pathname.match(/^\/api\/review-round-images\/([^/]+)$/);
@@ -41,6 +44,19 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       etag: result.object.httpEtag
     });
     return new Response(result.object.body, { headers });
+  }
+
+  if (request.method === "GET" && audioFileMatch) {
+    const result = await getSubmissionAudioObject(env, audioFileMatch[1], url.searchParams.get("token") || "");
+    if (!result) return notFound();
+    return new Response(result.object.body, {
+      headers: {
+        "access-control-allow-origin": "*",
+        "cache-control": "private, max-age=3600",
+        "content-type": result.audio.content_type,
+        etag: result.object.httpEtag
+      }
+    });
   }
 
   if (request.method === "GET" && reviewFileMatch) {
@@ -80,6 +96,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const createMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submissions$/);
   const taskSubmissionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/submission$/);
   const uploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/photos$/);
+  const audioUploadMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/audio$/);
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
   const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
   const resubmitMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/resubmit$/);
@@ -91,6 +108,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(createMatch)
     || Boolean(taskSubmissionMatch)
     || Boolean(uploadMatch)
+    || Boolean(audioUploadMatch)
     || Boolean(finalizeMatch)
     || Boolean(reviewMatch)
     || Boolean(resubmitMatch)
@@ -169,6 +187,15 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       return uploaded
         ? jsonResponse({ photo: uploaded }, { status: 201 })
         : notFound();
+    }
+
+    if (request.method === "POST" && audioUploadMatch) {
+      const formData = await request.formData().catch(() => null);
+      const audio = formData?.get("audio");
+      const durationMs = Number(formData?.get("durationMs"));
+      if (!(audio instanceof File)) return badRequest("请选择要上传的录音。");
+      const uploaded = await uploadSubmissionAudio(env, user, audioUploadMatch[1], audio, durationMs);
+      return uploaded ? jsonResponse({ audio: uploaded }, { status: 201 }) : notFound();
     }
 
     if (request.method === "POST" && finalizeMatch) {

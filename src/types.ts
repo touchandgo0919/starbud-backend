@@ -201,11 +201,32 @@ export interface SubmissionPhotoDto {
   createdAt: string;
 }
 
+export interface SubmissionAudioRow {
+  id: string;
+  submission_id: string;
+  object_key: string;
+  access_token: string;
+  content_type: string;
+  byte_size: number;
+  duration_ms: number;
+  created_at: string;
+}
+
+export interface SubmissionAudioDto {
+  id: string;
+  url: string;
+  contentType: string;
+  byteSize: number;
+  durationMs: number;
+  createdAt: string;
+}
+
 export interface SubmissionReviewRoundDto {
   id: string;
   sequence: number;
   note: string;
   photos: SubmissionPhotoDto[];
+  audios: SubmissionAudioDto[];
   reviewImages: SubmissionPhotoDto[];
   reviewImageUrl: string;
   submittedAt: string | null;
@@ -224,6 +245,7 @@ export interface SubmissionDto {
   status: "draft" | "submitted";
   photoCount: number;
   photos: SubmissionPhotoDto[];
+  audio: SubmissionAudioDto | null;
   createdAt: string;
   submittedAt: string | null;
   reviewedAt: string | null;

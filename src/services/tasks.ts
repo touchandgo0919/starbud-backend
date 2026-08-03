@@ -715,7 +715,7 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
   }
 
   if (task.requiresPhotoUpload) {
-    throw new Error("照片型任务需由小朋友提交照片后，在提交详情中关闭。");
+    throw new Error("附件任务需由小朋友提交照片或录音后，在提交详情中关闭。");
   }
 
   return completeTask(env, taskId, date);
@@ -790,8 +790,12 @@ export async function repairTaskStatusForUser(
           "SELECT COUNT(*) AS count FROM task_submission_photos WHERE submission_id = ?"
         ).bind(submission.id).first<{ count: number }>()
         : null;
-      if (submission?.status !== "submitted" || !photoCount?.count) {
-        throw new Error("照片型任务需至少提交一张作业照片后才能直接完成。");
+      const audio = submission
+        ? await env.DB.prepare("SELECT id FROM task_submission_audios WHERE submission_id = ? LIMIT 1")
+          .bind(submission.id).first<{ id: string }>()
+        : null;
+      if (submission?.status !== "submitted" || (!photoCount?.count && !audio)) {
+        throw new Error("附件任务需至少提交一张照片或一段录音后才能直接完成。");
       }
 
       statements.push(
