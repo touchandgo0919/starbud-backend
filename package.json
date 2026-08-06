@@ -10,11 +10,16 @@
     "d1:create": "wrangler d1 create starbud",
     "d1:migrate:local": "node scripts/apply-idempotent-migrations.mjs local",
     "d1:migrate:remote": "node scripts/apply-idempotent-migrations.mjs remote",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run test:integration",
+    "test:integration": "node --test --test-concurrency=1 tests/api.integration.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260714.1",
+    "esbuild": "^0.28.1",
+    "miniflare": "^4.20260730.0",
     "typescript": "^5.7.2",
+    "undici": "^7.28.0",
     "wrangler": "^4.113.0"
   },
   "overrides": {
