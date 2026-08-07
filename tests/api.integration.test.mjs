@@ -254,6 +254,10 @@ describe("Starbud Worker API", () => {
     });
     const taskId = taskCreated.body.task.id;
 
+    await api(`/api/ai/home-overview?childId=${targetChild.id}&days=7`, {
+      token: child.token, client: "mini_program", status: 403
+    });
+
     const taskList = await api(`/api/tasks?page=1&pageSize=10&date=${date}`, {
       token: child.token, client: "mini_program"
     });
@@ -320,6 +324,16 @@ describe("Starbud Worker API", () => {
       method: "POST", token: parent.token, client: "web"
     });
     assert.ok(finalized.body.submission.finalizedAt);
+
+    const aiOverview = await api(`/api/ai/home-overview?childId=${targetChild.id}&days=7`, {
+      token: parent.token, client: "web"
+    });
+    assert.equal(aiOverview.body.overview.scope.childId, targetChild.id);
+    assert.equal(aiOverview.body.overview.period.days, 7);
+    assert.ok(aiOverview.body.overview.metrics.totalTasks >= 1);
+    assert.ok(aiOverview.body.overview.metrics.completionRate >= 0);
+    assert.equal(aiOverview.body.overview.trend.length, 7);
+    assert.equal(aiOverview.body.overview.analysisMode, "deterministic");
 
     const childSubmission = await api(`/api/tasks/${taskId}/submission?date=${date}`, {
       token: child.token, client: "mini_program"

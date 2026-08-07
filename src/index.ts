@@ -1,6 +1,7 @@
 import { emptyResponse, jsonResponse, notFound } from "./http";
 import { handleAuth } from "./routes/auth";
 import { handleAccessEvents } from "./routes/access-events";
+import { handleAi } from "./routes/ai";
 import { handleFamilies } from "./routes/families";
 import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
@@ -70,6 +71,12 @@ export default {
 
     if (accessEventsResponse) {
       return accessEventsResponse;
+    }
+
+    const aiResponse = await handleAi(request, env, url);
+
+    if (aiResponse) {
+      return trackedResponse(request, env, url, aiResponse);
     }
 
     const familyResponse = await handleFamilies(request, env, url);

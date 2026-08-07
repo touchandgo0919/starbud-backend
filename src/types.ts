@@ -283,3 +283,47 @@ export interface NotificationDto {
   readAt: string | null;
   createdAt: string;
 }
+
+export interface AiOverviewEvidence {
+  taskId: string;
+  childId: string;
+  childName: string;
+  taskTitle: string;
+  occurrenceDate: string;
+  detail: string;
+}
+
+export interface AiOverviewInsight {
+  id: string;
+  tone: "positive" | "attention" | "neutral";
+  title: string;
+  summary: string;
+  evidence: AiOverviewEvidence[];
+  action: null | {
+    type: "reminder_shift" | "task_breakdown";
+    title: string;
+    description: string;
+    changeMinutes?: number;
+    trialDays: 7;
+  };
+}
+
+export interface AiHomeOverviewDto {
+  generatedAt: string;
+  analysisMode: "deterministic";
+  period: { days: 7 | 28; from: string; to: string };
+  scope: { childId: string | null; childName: string };
+  dataStatus: "ready" | "insufficient";
+  confidence: "high" | "medium" | "low";
+  summary: { title: string; description: string };
+  metrics: {
+    totalTasks: number;
+    completionRate: number;
+    completionRateDelta: number | null;
+    onTimeRate: number | null;
+    averageClaimDelayMinutes: number | null;
+    revisionRate: number | null;
+  };
+  trend: Array<{ date: string; completed: number; total: number }>;
+  insights: AiOverviewInsight[];
+}

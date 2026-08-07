@@ -139,6 +139,7 @@ and edit Worker secrets.
 - `POST /api/auth/login`
 - `GET /api/me`
 - `GET /api/children`
+- `GET /api/ai/home-overview?childId=...&days=7|28` (parent or admin)
 - `GET /api/families`
 - `POST /api/families`
 - `PATCH /api/families/:id`
