@@ -8,6 +8,7 @@ export interface Env {
   AI_PROVIDER?: string;
   AI_REASONING_EFFORT?: string;
   AI_RESPONSES_PATH?: string;
+  AI_ANALYSIS_HOUR?: string;
   ADMIN_INITIAL_PASSWORD?: string;
   INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;
@@ -326,4 +327,36 @@ export interface AiHomeOverviewDto {
   };
   trend: Array<{ date: string; completed: number; total: number }>;
   insights: AiOverviewInsight[];
+}
+
+export interface AiModelAnalysisContent {
+  parentSummary: {
+    title: string;
+    description: string;
+  };
+  childNextStep: {
+    title: string;
+    description: string;
+  };
+}
+
+export interface AiAnalysisSnapshotDto {
+  childId: string;
+  childName: string;
+  analysisDate: string;
+  periodDays: number;
+  model: string;
+  generatedAt: string;
+  result: AiModelAnalysisContent;
+}
+
+export interface ChildNextStepDto {
+  title: string;
+  description: string;
+  actionLabel: string;
+  taskId: string | null;
+  taskDate: string | null;
+  stage: "claim" | "continue" | "revise" | "waiting" | "complete" | "rest";
+  source: "model" | "rules";
+  generatedAt: string | null;
 }

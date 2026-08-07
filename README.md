@@ -105,6 +105,13 @@ reasoning. Every request sets `store: false`. `AI_RESPONSES_PATH` is separately
 configurable because OpenAI-compatible gateways do not always expose the same
 URL prefix.
 
+The scheduled Worker generates one 28-day model analysis per child at 04:00
+China Standard Time by default and stores the validated result in D1 table
+`ai_analysis_results`. Change the hour with `AI_ANALYSIS_HOUR`. The existing
+minute-level Cron remains responsible for task reminders; a unique D1 key makes
+daily analysis idempotent. Failed model calls are recorded and never block task
+reminders or the rule-based child guidance fallback.
+
 `JWT_SECRET` is required and must contain at least 32 characters. The Worker
 fails closed when it is missing or too short.
 
@@ -140,6 +147,7 @@ and edit Worker secrets.
 - `GET /api/me`
 - `GET /api/children`
 - `GET /api/ai/home-overview?childId=...&days=7|28` (parent or admin)
+- `GET /api/ai/child-next-step` (child; latest model snapshot with rule fallback)
 - `GET /api/families`
 - `POST /api/families`
 - `PATCH /api/families/:id`

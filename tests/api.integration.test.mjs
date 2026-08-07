@@ -258,6 +258,16 @@ describe("Starbud Worker API", () => {
       token: child.token, client: "mini_program", status: 403
     });
 
+    await api("/api/ai/child-next-step", {
+      token: parent.token, client: "web", status: 403
+    });
+    const childNextStep = await api("/api/ai/child-next-step", {
+      token: child.token, client: "mini_program"
+    });
+    assert.equal(childNextStep.body.nextStep.taskId, taskId);
+    assert.equal(childNextStep.body.nextStep.stage, "claim");
+    assert.equal(childNextStep.body.nextStep.source, "rules");
+
     const taskList = await api(`/api/tasks?page=1&pageSize=10&date=${date}`, {
       token: child.token, client: "mini_program"
     });
@@ -268,6 +278,32 @@ describe("Starbud Worker API", () => {
       method: "POST", token: child.token, client: "desktop_app", body: { taskDate: date }
     });
     assert.ok(claimed.body.task.claimedAt);
+
+    const database = await runtime.getD1Database("DB");
+    await database.prepare(
+      `INSERT INTO ai_analysis_results (
+        id, child_id, analysis_date, period_days, status, model,
+        result_json, generated_at, updated_at
+       ) VALUES (?, ?, ?, 28, 'completed', 'gpt-5.5', ?, ?, ?)`
+    ).bind(
+      `analysis-${Date.now()}`,
+      targetChild.id,
+      date,
+      JSON.stringify({
+        parentSummary: { title: "任务开始更稳定", description: "近期任务领取节奏趋于稳定。" },
+        childNextStep: { title: "完成眼前的一步", description: "先完成当前任务，完成后检查附件再提交。" }
+      }),
+      `${date} 04:00:00`,
+      `${date} 04:00:00`
+    ).run();
+
+    const claimedNextStep = await api("/api/ai/child-next-step", {
+      token: child.token, client: "mini_program"
+    });
+    assert.equal(claimedNextStep.body.nextStep.taskId, taskId);
+    assert.equal(claimedNextStep.body.nextStep.stage, "continue");
+    assert.equal(claimedNextStep.body.nextStep.source, "model");
+    assert.match(claimedNextStep.body.nextStep.description, /检查附件/);
 
     const createdSubmission = await api(`/api/tasks/${taskId}/submissions`, {
       method: "POST", token: child.token, client: "mini_program", status: 201,
@@ -334,6 +370,12 @@ describe("Starbud Worker API", () => {
     assert.ok(aiOverview.body.overview.metrics.completionRate >= 0);
     assert.equal(aiOverview.body.overview.trend.length, 7);
     assert.equal(aiOverview.body.overview.analysisMode, "deterministic");
+    assert.equal(aiOverview.body.overview.modelAnalysis, null);
+    const monthlyAiOverview = await api(`/api/ai/home-overview?childId=${targetChild.id}&days=28`, {
+      token: parent.token, client: "web"
+    });
+    assert.equal(monthlyAiOverview.body.overview.modelAnalysis.model, "gpt-5.5");
+    assert.equal(monthlyAiOverview.body.overview.modelAnalysis.result.parentSummary.title, "任务开始更稳定");
 
     const childSubmission = await api(`/api/tasks/${taskId}/submission?date=${date}`, {
       token: child.token, client: "mini_program"
