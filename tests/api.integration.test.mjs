@@ -261,12 +261,24 @@ describe("Starbud Worker API", () => {
     await api("/api/ai/child-next-step", {
       token: parent.token, client: "web", status: 403
     });
+    await api("/api/child/home", {
+      token: parent.token, client: "web", status: 403
+    });
     const childNextStep = await api("/api/ai/child-next-step", {
       token: child.token, client: "mini_program"
     });
     assert.equal(childNextStep.body.nextStep.taskId, taskId);
     assert.equal(childNextStep.body.nextStep.stage, "claim");
     assert.equal(childNextStep.body.nextStep.source, "rules");
+
+    const childHome = await api("/api/child/home", {
+      token: child.token, client: "mini_program"
+    });
+    assert.equal(childHome.body.home.nextStep.taskId, taskId);
+    assert.equal(childHome.body.home.progress.total >= 1, true);
+    assert.equal(childHome.body.home.progress.pending >= 1, true);
+    assert.equal(childHome.body.home.encouragement.source, "facts");
+    assert.ok(Array.isArray(childHome.body.home.attention));
 
     const taskList = await api(`/api/tasks?page=1&pageSize=10&date=${date}`, {
       token: child.token, client: "mini_program"

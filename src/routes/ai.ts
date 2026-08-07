@@ -2,13 +2,19 @@ import { badRequest, forbidden, jsonResponse, unauthorized } from "../http";
 import { getAiHomeOverview } from "../services/ai-overview";
 import { getChildNextStep, getLatestAiAnalysis } from "../services/ai-analysis";
 import { getAuthUser } from "../services/auth";
+import { getChildHome } from "../services/child-home";
 import type { Env } from "../types";
 
 export async function handleAi(request: Request, env: Env, url: URL) {
-  if (!url.pathname.startsWith("/api/ai")) return null;
+  const isChildHome = url.pathname === "/api/child/home";
+  if (!url.pathname.startsWith("/api/ai") && !isChildHome) return null;
 
   const user = await getAuthUser(request, env);
   if (!user) return unauthorized();
+  if (request.method === "GET" && isChildHome) {
+    if (user.role !== "child") return forbidden("儿童首页仅供儿童账号使用。");
+    return jsonResponse({ home: await getChildHome(env, user) });
+  }
   if (request.method === "GET" && url.pathname === "/api/ai/child-next-step") {
     if (user.role !== "child") return forbidden("下一步建议仅供儿童账号使用。");
     return jsonResponse({ nextStep: await getChildNextStep(env, user) });

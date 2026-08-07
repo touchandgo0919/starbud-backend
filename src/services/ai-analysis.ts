@@ -318,11 +318,11 @@ function buildRuleNextStep(tasks: TaskDto[]): ChildNextStepDto {
   return { title: "今天的任务完成了", description: "做得不错，可以回顾一下今天最顺利的一步。", actionLabel: "查看记录", taskId: task.id, taskDate: task.occurrenceDate, stage: "complete", source: "rules", generatedAt: null };
 }
 
-export async function getChildNextStep(env: Env, user: AuthUser) {
+export async function getChildNextStep(env: Env, user: AuthUser, providedTasks?: TaskDto[]) {
   const childId = await childIdForUser(env, user);
   if (!childId) return buildRuleNextStep([]);
   const [tasks, snapshot] = await Promise.all([
-    getTodayTasksForUser(env, user),
+    providedTasks ? Promise.resolve(providedTasks) : getTodayTasksForUser(env, user),
     getLatestAiAnalysis(env, childId)
   ]);
   const guidance = buildRuleNextStep(tasks);

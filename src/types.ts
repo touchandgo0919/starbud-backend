@@ -360,3 +360,31 @@ export interface ChildNextStepDto {
   source: "model" | "rules";
   generatedAt: string | null;
 }
+
+export interface ChildHomeAttentionDto {
+  notificationId: string;
+  title: string;
+  description: string;
+  taskId: string;
+  taskDate: string;
+  actionLabel: string;
+}
+
+export interface ChildHomeDto {
+  date: string;
+  greeting: string;
+  progress: {
+    total: number;
+    completed: number;
+    pending: number;
+    percent: number;
+  };
+  attention: ChildHomeAttentionDto[];
+  nextStep: ChildNextStepDto;
+  encouragement: {
+    title: string;
+    description: string;
+    source: "facts";
+  };
+  syncedAt: string;
+}
