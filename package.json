@@ -12,7 +12,7 @@
     "d1:migrate:remote": "node scripts/apply-idempotent-migrations.mjs remote",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run test:integration",
-    "test:integration": "node --test --test-concurrency=1 tests/api.integration.test.mjs"
+    "test:integration": "node --test --test-concurrency=1 tests/*.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260714.1",

@@ -6,6 +6,7 @@ import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
 import { getAuthUser, isAuthConfigured } from "./services/auth";
+import { getAiConfig, isAiConfigured } from "./services/ai";
 import { recordApiAccessEvent } from "./services/access-events";
 import { sendDueClaimReminders } from "./services/tasks";
 import type { Env } from "./types";
@@ -41,11 +42,20 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       const authConfigured = isAuthConfigured(env);
+      const aiConfigured = isAiConfigured(env);
+      const aiConfig = getAiConfig(env);
       return jsonResponse({
         ok: authConfigured,
         service: "starbud-backend",
         checks: {
-          authentication: authConfigured ? "ready" : "not_configured"
+          authentication: authConfigured ? "ready" : "not_configured",
+          ai: aiConfigured ? "ready" : "not_configured"
+        },
+        ai: {
+          provider: aiConfig.provider,
+          model: aiConfig.model,
+          reasoningEffort: aiConfig.reasoningEffort,
+          responseStorageEnabled: aiConfig.responseStorageEnabled
         }
       }, { status: authConfigured ? 200 : 503 });
     }

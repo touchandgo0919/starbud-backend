@@ -90,6 +90,21 @@ Production should use a custom JWT secret:
 wrangler secret put JWT_SECRET
 ```
 
+Configure the AI provider key as an encrypted Worker Secret. Never place the
+key in `wrangler.toml`, frontend environment variables, mini-program code or the
+desktop app:
+
+```bash
+npx wrangler secret put OPENAI_API_KEY
+```
+
+All server-side AI features use the centralized client in
+`src/services/ai.ts`. The production defaults are configured in
+`wrangler.toml`: provider `OpenAI`, model `gpt-5.5`, Responses API and `xhigh`
+reasoning. Every request sets `store: false`. `AI_RESPONSES_PATH` is separately
+configurable because OpenAI-compatible gateways do not always expose the same
+URL prefix.
+
 `JWT_SECRET` is required and must contain at least 32 characters. The Worker
 fails closed when it is missing or too short.
 

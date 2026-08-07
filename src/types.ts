@@ -2,6 +2,12 @@ export interface Env {
   APP_TIME_ZONE?: string;
   DB: D1Database;
   SUBMISSION_FILES: R2Bucket;
+  OPENAI_API_KEY?: string;
+  AI_BASE_URL?: string;
+  AI_MODEL?: string;
+  AI_PROVIDER?: string;
+  AI_REASONING_EFFORT?: string;
+  AI_RESPONSES_PATH?: string;
   ADMIN_INITIAL_PASSWORD?: string;
   INITIAL_PASSWORD_SUFFIX?: string;
   JWT_SECRET?: string;

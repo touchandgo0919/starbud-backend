@@ -164,6 +164,10 @@ describe("Starbud Worker API", () => {
     const health = await api("/health", { status: 200 });
     assert.equal(health.body.ok, true);
     assert.equal(health.body.checks.authentication, "ready");
+    assert.equal(health.body.checks.ai, "not_configured");
+    assert.equal(health.body.ai.model, "gpt-5.5");
+    assert.equal(health.body.ai.reasoningEffort, "xhigh");
+    assert.equal(health.body.ai.responseStorageEnabled, false);
 
     const preflight = await runtime.dispatchFetch(`${baseUrl}/api/tasks`, {
       method: "OPTIONS",
