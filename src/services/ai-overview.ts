@@ -7,6 +7,7 @@ import type {
   TaskDto
 } from "../types";
 import { localTimestamp } from "../utils";
+import { getLearningIssueOverview } from "./ai-learning-issues";
 import { listChildren } from "./children";
 import { listTasksForUser, todayKey } from "./tasks";
 
@@ -173,9 +174,10 @@ export async function getAiHomeOverview(
   const previousTo = shiftDateKey(from, -1);
   const previousFrom = shiftDateKey(previousTo, -(options.days - 1));
   const filters = selectedChild ? { childId: selectedChild.id } : {};
-  const [currentTasks, previousTasks] = await Promise.all([
+  const [currentTasks, previousTasks, learningIssues] = await Promise.all([
     listTasksForUser(env, user, { ...filters, dateFrom: from, dateTo: to }),
-    listTasksForUser(env, user, { ...filters, dateFrom: previousFrom, dateTo: previousTo })
+    listTasksForUser(env, user, { ...filters, dateFrom: previousFrom, dateTo: previousTo }),
+    getLearningIssueOverview(env, user, { childId: selectedChild?.id, from, to })
   ]);
   const measures = currentTasks.map(measureTask);
   const previousMeasures = previousTasks.map(measureTask);
@@ -207,6 +209,7 @@ export async function getAiHomeOverview(
       const day = measures.filter((item) => item.task.occurrenceDate === date);
       return { date, total: day.length, completed: day.filter((item) => item.completed).length };
     }),
-    insights
+    insights,
+    learningIssues
   };
 }

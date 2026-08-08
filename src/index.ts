@@ -9,6 +9,7 @@ import { handleUsers } from "./routes/users";
 import { getAuthUser, isAuthConfigured } from "./services/auth";
 import { getAiConfig, isAiConfigured } from "./services/ai";
 import { generateDailyAiAnalyses, shouldRunDailyAiAnalysis } from "./services/ai-analysis";
+import { processPendingLearningIssueAnalyses } from "./services/ai-learning-issues";
 import { recordApiAccessEvent } from "./services/access-events";
 import { sendDueClaimReminders } from "./services/tasks";
 import type { Env } from "./types";
@@ -109,6 +110,7 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(sendDueClaimReminders(env));
+    ctx.waitUntil(processPendingLearningIssueAnalyses(env));
     if (shouldRunDailyAiAnalysis(env)) {
       ctx.waitUntil(generateDailyAiAnalyses(env));
     }

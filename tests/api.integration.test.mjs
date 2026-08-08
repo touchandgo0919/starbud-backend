@@ -383,6 +383,36 @@ describe("Starbud Worker API", () => {
     assert.equal(aiOverview.body.overview.trend.length, 7);
     assert.equal(aiOverview.body.overview.analysisMode, "deterministic");
     assert.equal(aiOverview.body.overview.modelAnalysis, null);
+    assert.equal(aiOverview.body.overview.learningIssues.status, "analyzing");
+    assert.equal(aiOverview.body.overview.learningIssues.analyzingReviews, 2);
+    assert.equal(aiOverview.body.overview.learningIssues.issueCount, 0);
+    const issueDatabase = await runtime.getD1Database("DB");
+    const pendingIssueAnalyses = await issueDatabase.prepare(
+      "SELECT id FROM ai_learning_issue_analyses WHERE child_id = ? ORDER BY reviewed_at ASC"
+    ).bind(targetChild.id).all();
+    assert.equal(pendingIssueAnalyses.results.length, 2);
+    for (const analysis of pendingIssueAnalyses.results) {
+      await issueDatabase.prepare(
+        `UPDATE ai_learning_issue_analyses
+         SET status = 'completed', model = 'gpt-5.5', result_json = ?, generated_at = ?, updated_at = ?
+         WHERE id = ?`
+      ).bind(JSON.stringify({
+        summary: "需要继续巩固进位计算。",
+        issues: [
+          { topic: "进位加法", category: "calculation", summary: "进位步骤遗漏", evidence: "家长批改记录", confidence: "high" },
+          { topic: "疑似审题", category: "comprehension", summary: "证据不足", evidence: "未明确标注", confidence: "low" }
+        ]
+      }), "2026-08-08 12:00:00", "2026-08-08 12:00:00", analysis.id).run();
+    }
+    const summarizedIssues = await api(`/api/ai/home-overview?childId=${targetChild.id}&days=7`, {
+      token: parent.token, client: "web"
+    });
+    assert.equal(summarizedIssues.body.overview.learningIssues.status, "ready");
+    assert.equal(summarizedIssues.body.overview.learningIssues.issueCount, 2);
+    assert.equal(summarizedIssues.body.overview.learningIssues.recurring[0].topic, "进位加法");
+    assert.equal(summarizedIssues.body.overview.learningIssues.recurring[0].count, 2);
+    assert.ok(summarizedIssues.body.overview.learningIssues.recent.every((item) => item.topic !== "疑似审题"));
+    assert.ok(summarizedIssues.body.overview.learningIssues.recent.every((item) => item.resolved));
     const monthlyAiOverview = await api(`/api/ai/home-overview?childId=${targetChild.id}&days=28`, {
       token: parent.token, client: "web"
     });

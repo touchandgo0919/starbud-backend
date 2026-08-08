@@ -13,6 +13,7 @@ import type {
   SubmissionRow
 } from "../types";
 import { childIdForUser, listChildren } from "./children";
+import { queueLearningIssueAnalysis } from "./ai-learning-issues";
 import { getTaskById, todayKey } from "./tasks";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
@@ -21,6 +22,14 @@ const maxPhotoCount = 8;
 const allowedAudioTypes = new Set(["audio/mpeg", "audio/mp3", "audio/mp4", "audio/aac", "audio/webm"]);
 const maxAudioBytes = 5 * 1024 * 1024;
 const maxAudioDurationMs = 3 * 60 * 1000;
+
+async function queueLearningIssueAnalysisSafely(env: Env, submissionId: string, reviewRoundId: string) {
+  try {
+    await queueLearningIssueAnalysis(env, submissionId, reviewRoundId);
+  } catch (error) {
+    console.error("Failed to queue learning issue analysis:", error);
+  }
+}
 
 function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
   return {
@@ -540,6 +549,7 @@ export async function submitReview(
     const image = inputImages[0];
     const accessToken = randomId("review-file");
 
+    let analysisRoundId = "";
     if (replaceReviewImageId.startsWith("legacy-")) {
       const roundId = replaceReviewImageId.slice("legacy-".length);
       const round = await env.DB.prepare(
@@ -548,6 +558,7 @@ export async function submitReview(
          LIMIT 1`
       ).bind(roundId, submissionId).first<ReviewRoundRow>();
       if (!round) return null;
+      analysisRoundId = roundId;
 
       await env.SUBMISSION_FILES.put(round.review_object_key, image.stream(), {
         httpMetadata: { contentType: image.type }
@@ -581,6 +592,7 @@ export async function submitReview(
          LIMIT 1`
       ).bind(replaceReviewImageId, submissionId).first<ReviewRoundImageRow>();
       if (!reviewImage) return null;
+      analysisRoundId = reviewImage.review_round_id;
 
       await env.SUBMISSION_FILES.put(reviewImage.object_key, image.stream(), {
         httpMetadata: { contentType: image.type }
@@ -605,6 +617,7 @@ export async function submitReview(
       ]);
     }
 
+    await queueLearningIssueAnalysisSafely(env, submissionId, analysisRoundId);
     const updated = await getSubmissionRow(env, submissionId);
     return updated ? submissionDto(env, updated) : null;
   }
@@ -698,6 +711,7 @@ export async function submitReview(
     )
   ]);
 
+  await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }
@@ -773,6 +787,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
     )
   ]);
 
+  await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }
