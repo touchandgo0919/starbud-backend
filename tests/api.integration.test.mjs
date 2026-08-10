@@ -286,6 +286,11 @@ describe("Starbud Worker API", () => {
     assert.ok(taskList.body.tasks.some((item) => item.id === taskId));
     assert.equal(taskList.body.pagination.page, 1);
 
+    const calendar = await api(`/api/tasks/calendar?dateFrom=${date}&dateTo=${date}`, {
+      token: child.token, client: "mini_program"
+    });
+    assert.equal(calendar.body.dates[date], "pending");
+
     const claimed = await api(`/api/tasks/${taskId}/claim`, {
       method: "POST", token: child.token, client: "desktop_app", body: { taskDate: date }
     });

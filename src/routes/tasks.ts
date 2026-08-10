@@ -35,6 +35,34 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
     return jsonResponse({ tasks: await getTodayTasksForUser(env, user, childId) });
   }
 
+  if (request.method === "GET" && url.pathname === "/api/tasks/calendar") {
+    const tasks = await listTasksForUser(env, user, {
+      childId: url.searchParams.get("childId") || undefined,
+      dateFrom: url.searchParams.get("dateFrom") || undefined,
+      dateTo: url.searchParams.get("dateTo") || undefined
+    });
+    const priorities = { revision: 5, review: 4, active: 3, pending: 2, completed: 1 };
+    const dates: Record<string, keyof typeof priorities> = {};
+
+    for (const task of tasks) {
+      if (!task.occurrenceDate) continue;
+      const status = task.reviewStatus === "needs_revision"
+        ? "revision"
+        : task.reviewStatus === "pending_review"
+          ? "review"
+          : task.status === "completed" || task.reviewStatus === "completed"
+            ? "completed"
+            : task.claimedAt || task.reviewStatus === "submitting"
+              ? "active"
+              : "pending";
+      if (!dates[task.occurrenceDate] || priorities[status] > priorities[dates[task.occurrenceDate]]) {
+        dates[task.occurrenceDate] = status;
+      }
+    }
+
+    return jsonResponse({ dates });
+  }
+
   if (request.method === "GET" && url.pathname === "/api/tasks") {
     const scope = url.searchParams.get("scope");
     const tasks = scope === "definitions"
