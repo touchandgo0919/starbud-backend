@@ -20,6 +20,7 @@ async function recordAuthEvent(env: Env, request: Request, input: Parameters<typ
 }
 
 export async function handleAuth(request: Request, env: Env, url: URL) {
+  const isMiniProgram = request.headers.get("x-starbud-client") === "mini_program";
   if (
     (request.method === "POST" && url.pathname === "/api/auth/register") ||
     (request.method === "POST" && url.pathname === "/api/auth/login")
@@ -62,7 +63,7 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
         route: url.pathname
       });
 
-      return jsonResponse({ user, token: await signToken(env, user) }, { status: 201 });
+      return jsonResponse({ user, token: await signToken(env, user, isMiniProgram) }, { status: 201 });
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "注册失败。");
     }
@@ -104,7 +105,10 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
       route: url.pathname
     });
 
-    return jsonResponse(session);
+    return jsonResponse({
+      ...session,
+      token: isMiniProgram ? await signToken(env, session.user, true) : session.token
+    });
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {

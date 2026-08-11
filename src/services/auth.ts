@@ -179,14 +179,20 @@ export async function loginUser(env: Env, username: string, password: string) {
   };
 }
 
-export async function signToken(env: Env, user: AuthUser) {
+export async function signToken(env: Env, user: AuthUser, longLived = false) {
   const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const expiresAt = new Date();
+  if (longLived) {
+    expiresAt.setFullYear(expiresAt.getFullYear() + 99);
+  } else {
+    expiresAt.setTime(expiresAt.getTime() + tokenTtlSeconds * 1000);
+  }
   const payload = base64UrlEncode(
     JSON.stringify({
       sub: user.id,
       username: user.username,
       role: user.role,
-      exp: Math.floor(Date.now() / 1000) + tokenTtlSeconds
+      exp: Math.floor(expiresAt.getTime() / 1000)
     })
   );
   const data = `${header}.${payload}`;
