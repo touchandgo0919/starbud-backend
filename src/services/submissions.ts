@@ -1116,8 +1116,8 @@ export async function listNotifications(env: Env, user: AuthUser) {
 export async function markNotificationRead(env: Env, user: AuthUser, notificationId: string) {
   const result = await env.DB.prepare(
     `UPDATE notifications
-     SET read_at = COALESCE(read_at, ?)
-     WHERE id = ? AND recipient_user_id = ?`
+     SET read_at = ?
+     WHERE id = ? AND recipient_user_id = ? AND read_at IS NULL`
   )
     .bind(localTimestamp(), notificationId, user.id)
     .run();

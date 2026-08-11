@@ -313,7 +313,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
     if (request.method === "POST" && notificationReadMatch) {
       const updated = await markNotificationRead(env, user, notificationReadMatch[1]);
-      return updated ? jsonResponse({ ok: true }) : notFound();
+      return jsonResponse({ ok: updated });
     }
   } catch (error) {
     return badRequest(error instanceof Error ? error.message : "作业提交失败。");

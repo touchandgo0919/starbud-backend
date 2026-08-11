@@ -469,9 +469,14 @@ describe("Starbud Worker API", () => {
     const notifications = await api("/api/notifications", { token: child.token, client: "desktop_app" });
     const completionNotice = notifications.body.notifications.find((item) => !item.readAt);
     assert.ok(completionNotice);
-    await api(`/api/notifications/${completionNotice.id}/read`, {
+    const firstNotificationRead = await api(`/api/notifications/${completionNotice.id}/read`, {
       method: "POST", token: child.token, client: "desktop_app"
     });
+    assert.equal(firstNotificationRead.body.ok, true);
+    const duplicateNotificationRead = await api(`/api/notifications/${completionNotice.id}/read`, {
+      method: "POST", token: child.token, client: "desktop_app"
+    });
+    assert.equal(duplicateNotificationRead.body.ok, false);
 
     await api("/api/admin/users", { token: parent.token, client: "web", status: 403 });
     const users = await api("/api/admin/users", { token: admin.token, client: "web" });
