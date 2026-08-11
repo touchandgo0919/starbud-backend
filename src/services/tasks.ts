@@ -57,7 +57,7 @@ function storedDateParts(value: string) {
 
 function shouldRunOnDate(
   env: Env,
-  row: Pick<TaskRow, "repeat_type" | "created_at" | "start_date">,
+  row: Pick<TaskRow, "repeat_type" | "created_at" | "start_date" | "end_date">,
   date = new Date()
 ) {
   const today = dateParts(env, date);
@@ -67,6 +67,7 @@ function shouldRunOnDate(
   if (today.key < start.key) {
     return false;
   }
+  if (row.end_date && today.key > row.end_date) return false;
 
   if (row.repeat_type === "daily") {
     return true;
@@ -136,6 +137,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     reviewStatus,
     submissionPhotoCount: row.submission_photo_count || 0,
     startDate: row.start_date || row.created_at.slice(0, 10),
+    endDate: row.end_date,
     createdAt: row.created_at
   };
 }
@@ -156,8 +158,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, revision_reminder_enabled, require_photo_upload, start_date, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, revision_reminder_enabled, require_photo_upload, start_date, end_date, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -172,6 +174,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.revisionReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
+      values.endDate,
       localTimestamp()
     )
     .run();
@@ -207,6 +210,10 @@ function validateTaskInput(env: Env, input: CreateTaskInput, fallbackStartDate =
   if (!storedDateParts(startDate) || startDate.length !== 10) {
     throw new Error("startDate must use YYYY-MM-DD format.");
   }
+  const endDate = input.endDate?.trim() || null;
+  if (endDate && (!storedDateParts(endDate) || endDate.length !== 10 || endDate < startDate)) {
+    throw new Error("endDate must not be earlier than startDate.");
+  }
 
   if (voiceContent.length > 120) {
     throw new Error("Voice reminder content cannot exceed 120 characters.");
@@ -226,7 +233,8 @@ function validateTaskInput(env: Env, input: CreateTaskInput, fallbackStartDate =
     claimReminderEnabled: input.voiceEnabled !== false && input.claimReminderEnabled === true,
     revisionReminderEnabled: input.requiresPhotoUpload !== false && input.revisionReminderEnabled === true,
     requiresPhotoUpload: input.requiresPhotoUpload !== false,
-    startDate
+    startDate,
+    endDate
   };
 }
 
@@ -257,7 +265,8 @@ export async function updateTaskForUser(
       claim_reminder_enabled = ?,
       revision_reminder_enabled = ?,
       require_photo_upload = ?,
-      start_date = ?
+      start_date = ?,
+      end_date = ?
      WHERE id = ?
       AND active = 1`
   )
@@ -272,6 +281,7 @@ export async function updateTaskForUser(
       values.revisionReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
+      values.endDate,
       taskId
     )
     .run();
@@ -332,11 +342,15 @@ export async function getTodayTasks(env: Env, childId?: string) {
       ON task_submissions.task_id = tasks.id
       AND task_submissions.child_id = tasks.child_id
       AND task_submissions.task_date = ?
+     LEFT JOIN task_occurrence_deletions
+      ON task_occurrence_deletions.task_id = tasks.id
+      AND task_occurrence_deletions.task_date = ?
      WHERE tasks.active = 1
       AND tasks.child_id = ?
+      AND task_occurrence_deletions.deleted_at IS NULL
      ORDER BY tasks.schedule_time ASC`
   )
-    .bind(date, date, date, childId)
+    .bind(date, date, date, date, childId)
     .all<TaskRow>();
 
   return result.results
@@ -525,8 +539,15 @@ function dateKeysBetween(from: string, to: string) {
   return dates;
 }
 
+function dateKeyOffset(dateKey: string, offset: number) {
+  const date = parseDateKey(dateKey);
+  if (!date) return dateKey;
+  date.setDate(date.getDate() + offset);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 async function getTaskOccurrences(env: Env, childId: string, from: string, to: string) {
-  const [taskResult, recordResult, submissionResult, claimResult] = await Promise.all([
+  const [taskResult, recordResult, submissionResult, claimResult, deletionResult] = await Promise.all([
     env.DB.prepare(
       `SELECT
         tasks.*,
@@ -593,7 +614,17 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
         AND task_claims.task_date BETWEEN ? AND ?`
     )
       .bind(childId, from, to)
-      .all<{ task_id: string; task_date: string; claimed_at: string | null }>()
+      .all<{ task_id: string; task_date: string; claimed_at: string | null }>(),
+    env.DB.prepare(
+      `SELECT task_occurrence_deletions.task_id, task_occurrence_deletions.task_date
+       FROM task_occurrence_deletions
+       INNER JOIN tasks ON tasks.id = task_occurrence_deletions.task_id
+       WHERE tasks.active = 1
+        AND tasks.child_id = ?
+        AND task_occurrence_deletions.task_date BETWEEN ? AND ?`
+    )
+      .bind(childId, from, to)
+      .all<{ task_id: string; task_date: string }>()
   ]);
   const records = new Map(
     recordResult.results.map((record) => [`${record.task_id}:${record.date}`, record])
@@ -607,6 +638,9 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
   const claims = new Map(
     claimResult.results.map((claim) => [`${claim.task_id}:${claim.task_date}`, claim])
   );
+  const deletedOccurrences = new Set(
+    deletionResult.results.map((deletion) => `${deletion.task_id}:${deletion.task_date}`)
+  );
 
   return dateKeysBetween(from, to).flatMap((dateKey) => {
     const occurrenceDate = parseDateKey(dateKey);
@@ -614,6 +648,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
 
     return taskResult.results
       .filter((row) => shouldRunOnDate(env, row, occurrenceDate))
+      .filter((row) => !deletedOccurrences.has(`${row.id}:${dateKey}`))
       .map((row) => {
         const record = records.get(`${row.id}:${dateKey}`);
         const submission = submissions.get(`${row.id}:${dateKey}`);
@@ -830,15 +865,19 @@ export async function repairTaskStatusForUser(
   return getTaskById(env, taskId, date);
 }
 
-export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string) {
+export async function remindTaskForUser(
+  env: Env,
+  user: AuthUser,
+  taskId: string,
+  input: { taskDate?: string; reminderType?: string } = {}
+) {
   if (user.role === "child") {
     throw new Error("仅家长或管理员可以发起提醒。");
   }
 
-  const task = await getTaskById(env, taskId);
-  if (!task || !task.voiceEnabled) {
-    return null;
-  }
+  const date = input.taskDate || todayKey(env);
+  const task = await getTaskById(env, taskId, date, true);
+  if (!task) return null;
 
   if (user.role !== "admin") {
     const children = await listChildren(env, user);
@@ -856,12 +895,27 @@ export async function remindTaskForUser(env: Env, user: AuthUser, taskId: string
     return null;
   }
 
+  const completed = task.status === "completed" || task.reviewStatus === "completed" || Boolean(task.finalizedAt);
+  if (completed) throw new Error("任务已经完成，无需再次提醒。");
+  if (task.reviewStatus === "pending_review") throw new Error("孩子已经提交，当前等待家长批改。");
+
+  const expectedType = task.needsRevision ? "revision" : task.claimedAt ? "complete" : "claim";
+  const reminderType = input.reminderType || expectedType;
+  if (!new Set(["claim", "complete", "revision"]).has(reminderType) || reminderType !== expectedType) {
+    throw new Error("任务状态已变化，请刷新后重试。");
+  }
+  const reminder = reminderType === "revision"
+    ? { type: "revision_reminder", title: "星星芽AI助手 修改提醒", content: `「${task.title}」批改后还需要修改，请尽快完成并重新提交。` }
+    : reminderType === "claim"
+      ? { type: "claim_reminder", title: "星星芽AI助手 领取提醒", content: `「${task.title}」还没有领取，请点击去领取。` }
+      : { type: "voice_reminder", title: "星星芽AI助手 完成提醒", content: `「${task.title}」正在进行中，请记得完成并提交。` };
+
   await env.DB.prepare(
     `INSERT INTO notifications
      (id, recipient_user_id, type, title, content, created_at)
-     VALUES (?, ?, 'voice_reminder', '星星芽AI助手 任务提醒', ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?)`
   )
-    .bind(randomId("notification"), child.child_user_id, task.voiceContent, localTimestamp())
+    .bind(randomId("notification"), child.child_user_id, reminder.type, reminder.title, reminder.content, localTimestamp())
     .run();
 
   return task;
@@ -913,8 +967,13 @@ export async function sendDueClaimReminders(env: Env) {
      LEFT JOIN task_records
       ON task_records.task_id = task_claim_reminders.task_id
       AND task_records.date = task_claim_reminders.task_date
+     LEFT JOIN task_occurrence_deletions
+      ON task_occurrence_deletions.task_id = task_claim_reminders.task_id
+      AND task_occurrence_deletions.task_date = task_claim_reminders.task_date
      WHERE tasks.active = 1
       AND tasks.claim_reminder_enabled = 1
+      AND (tasks.end_date IS NULL OR task_claim_reminders.task_date <= tasks.end_date)
+      AND task_occurrence_deletions.deleted_at IS NULL
       AND children.child_user_id IS NOT NULL
       AND task_claims.claimed_at IS NULL
       AND COALESCE(task_records.status, 'pending') != 'completed'
@@ -956,8 +1015,13 @@ export async function sendDueRevisionReminders(env: Env) {
      INNER JOIN tasks ON tasks.id = task_revision_reminders.task_id
      INNER JOIN task_submissions ON task_submissions.id = task_revision_reminders.submission_id
      INNER JOIN children ON children.id = tasks.child_id
+     LEFT JOIN task_occurrence_deletions
+      ON task_occurrence_deletions.task_id = task_revision_reminders.task_id
+      AND task_occurrence_deletions.task_date = task_revision_reminders.task_date
      WHERE tasks.active = 1
       AND tasks.revision_reminder_enabled = 1
+      AND (tasks.end_date IS NULL OR task_revision_reminders.task_date <= tasks.end_date)
+      AND task_occurrence_deletions.deleted_at IS NULL
       AND children.child_user_id IS NOT NULL
       AND task_submissions.status = 'submitted'
       AND task_submissions.reviewed_at IS NOT NULL
@@ -1018,7 +1082,12 @@ export async function claimTaskForUser(env: Env, user: AuthUser, taskId: string,
   return getTaskById(env, taskId, date);
 }
 
-export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string) {
+export async function deleteTaskForUser(
+  env: Env,
+  user: AuthUser,
+  taskId: string,
+  input: { scope?: string; date?: string } = {}
+) {
   if (user.role !== "parent" && user.role !== "admin") {
     return false;
   }
@@ -1029,15 +1098,33 @@ export async function deleteTaskForUser(env: Env, user: AuthUser, taskId: string
     return false;
   }
 
-  const result = await env.DB.prepare(
-    `UPDATE tasks
-     SET active = 0
-     WHERE id = ?
-      AND active = 1`
-  )
-    .bind(taskId)
-    .run();
+  const scope = input.scope || "all";
+  if (!new Set(["all", "future", "single"]).has(scope)) throw new Error("Invalid deletion scope.");
 
+  if (scope === "all") {
+    const result = await env.DB.prepare(
+      `UPDATE tasks SET active = 0 WHERE id = ? AND active = 1`
+    ).bind(taskId).run();
+    return result.meta.changes > 0;
+  }
+
+  const today = todayKey(env);
+  const date = input.date || today;
+  if (!parseDateKey(date)) throw new Error("Invalid task date.");
+  if (scope === "single") {
+    const result = await env.DB.prepare(
+      `INSERT OR IGNORE INTO task_occurrence_deletions (task_id, task_date, deleted_at)
+       VALUES (?, ?, ?)`
+    ).bind(taskId, date, localTimestamp()).run();
+    return result.meta.changes > 0;
+  }
+
+  const todayTask = await getTaskById(env, taskId, today, true);
+  const keepToday = Boolean(todayTask?.claimedAt || todayTask?.submissionId || todayTask?.completedAt);
+  const cutoff = keepToday ? dateKeyOffset(today, 1) : today;
+  const result = await env.DB.prepare(
+    "UPDATE tasks SET end_date = ? WHERE id = ? AND active = 1"
+  ).bind(dateKeyOffset(cutoff, -1), taskId).run();
   return result.meta.changes > 0;
 }
 
@@ -1081,6 +1168,12 @@ export async function getTaskById(env: Env, taskId: string, date = todayKey(env)
 
   if (!row) return null;
   if (requireOccurrence && !shouldRunOnDate(env, row, parseDateKey(date) || undefined)) return null;
+  if (requireOccurrence) {
+    const deleted = await env.DB.prepare(
+      "SELECT 1 FROM task_occurrence_deletions WHERE task_id = ? AND task_date = ? LIMIT 1"
+    ).bind(taskId, date).first();
+    if (deleted) return null;
+  }
   return toTaskDto(row, date);
 }
 

@@ -255,6 +255,15 @@ describe("Starbud Worker API", () => {
     });
     const taskId = taskCreated.body.task.id;
 
+    await api(`/api/tasks/${taskId}/remind`, {
+      method: "POST", token: parent.token, client: "mini_program",
+      body: { taskDate: date, reminderType: "claim" }
+    });
+    const claimNotifications = await api("/api/notifications", {
+      token: child.token, client: "mini_program"
+    });
+    assert.ok(claimNotifications.body.notifications.some((item) => item.type === "claim_reminder" && item.content.includes(taskCreated.body.task.title)));
+
     await api(`/api/ai/home-overview?childId=${targetChild.id}&days=7`, {
       token: child.token, client: "mini_program", status: 403
     });
@@ -296,6 +305,15 @@ describe("Starbud Worker API", () => {
       method: "POST", token: child.token, client: "desktop_app", body: { taskDate: date }
     });
     assert.ok(claimed.body.task.claimedAt);
+
+    await api(`/api/tasks/${taskId}/remind`, {
+      method: "POST", token: parent.token, client: "mini_program",
+      body: { taskDate: date, reminderType: "complete" }
+    });
+    const completionNotifications = await api("/api/notifications", {
+      token: child.token, client: "mini_program"
+    });
+    assert.ok(completionNotifications.body.notifications.some((item) => item.type === "voice_reminder" && item.content.includes(taskCreated.body.task.title)));
 
     const database = await runtime.getD1Database("DB");
     await database.prepare(
@@ -370,6 +388,14 @@ describe("Starbud Worker API", () => {
       method: "POST", token: parent.token, client: "web", body: reviewUpload
     });
     assert.ok(reviewed.body.submission.reviewImageUrl);
+    await api(`/api/tasks/${taskId}/remind`, {
+      method: "POST", token: parent.token, client: "mini_program",
+      body: { taskDate: date, reminderType: "revision" }
+    });
+    const revisionNotifications = await api("/api/notifications", {
+      token: child.token, client: "mini_program"
+    });
+    assert.ok(revisionNotifications.body.notifications.some((item) => item.type === "revision_reminder" && item.content.includes(taskCreated.body.task.title)));
     const revisionReminder = await (await runtime.getD1Database("DB")).prepare(
       "SELECT reminder_count FROM task_revision_reminders WHERE task_id = ? AND task_date = ?"
     ).bind(taskId, date).first();

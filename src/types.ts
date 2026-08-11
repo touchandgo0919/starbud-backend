@@ -111,6 +111,7 @@ export interface TaskRow {
   require_photo_upload: number;
   active: number;
   start_date: string | null;
+  end_date: string | null;
   created_at: string;
   record_status: string | null;
   record_date: string | null;
@@ -149,6 +150,7 @@ export interface TaskDto {
   reviewStatus: TaskReviewStatus;
   submissionPhotoCount: number;
   startDate: string;
+  endDate: string | null;
   createdAt: string;
 }
 
@@ -164,6 +166,7 @@ export interface CreateTaskInput {
   revisionReminderEnabled?: boolean;
   requiresPhotoUpload?: boolean;
   startDate?: string;
+  endDate?: string | null;
 }
 
 export interface RepairTaskStatusInput {

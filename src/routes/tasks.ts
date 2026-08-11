@@ -131,8 +131,9 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "POST" && remindMatch) {
+    const input = (await request.json().catch(() => ({}))) as { taskDate?: string; reminderType?: string };
     try {
-      const task = await remindTaskForUser(env, user, remindMatch[1]);
+      const task = await remindTaskForUser(env, user, remindMatch[1], input);
       return task ? jsonResponse({ task }) : notFound();
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "提醒发送失败。");
@@ -199,7 +200,13 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   }
 
   if (request.method === "DELETE" && deleteMatch) {
-    const deleted = await deleteTaskForUser(env, user, deleteMatch[1]);
+    const input = (await request.json().catch(() => ({}))) as { scope?: string; date?: string };
+    let deleted = false;
+    try {
+      deleted = await deleteTaskForUser(env, user, deleteMatch[1], input);
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "删除失败。");
+    }
 
     if (!deleted) {
       return notFound();
