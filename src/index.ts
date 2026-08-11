@@ -11,7 +11,7 @@ import { getAiConfig, isAiConfigured } from "./services/ai";
 import { generateDailyAiAnalyses, shouldRunDailyAiAnalysis } from "./services/ai-analysis";
 import { processPendingLearningIssueAnalyses } from "./services/ai-learning-issues";
 import { recordApiAccessEvent } from "./services/access-events";
-import { sendDueClaimReminders } from "./services/tasks";
+import { sendDueClaimReminders, sendDueRevisionReminders } from "./services/tasks";
 import type { Env } from "./types";
 
 async function trackedResponse(request: Request, env: Env, url: URL, response: Response) {
@@ -110,6 +110,7 @@ export default {
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(sendDueClaimReminders(env));
+    ctx.waitUntil(sendDueRevisionReminders(env));
     ctx.waitUntil(processPendingLearningIssueAnalyses(env));
     if (shouldRunDailyAiAnalysis(env)) {
       ctx.waitUntil(generateDailyAiAnalyses(env));

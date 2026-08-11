@@ -248,6 +248,7 @@ describe("Starbud Worker API", () => {
         voiceContent: "完成自动化测试任务",
         voiceReminderCount: 2,
         claimReminderEnabled: true,
+        revisionReminderEnabled: true,
         requiresPhotoUpload: true,
         startDate: date
       }
@@ -369,6 +370,10 @@ describe("Starbud Worker API", () => {
       method: "POST", token: parent.token, client: "web", body: reviewUpload
     });
     assert.ok(reviewed.body.submission.reviewImageUrl);
+    const revisionReminder = await (await runtime.getD1Database("DB")).prepare(
+      "SELECT reminder_count FROM task_revision_reminders WHERE task_id = ? AND task_date = ?"
+    ).bind(taskId, date).first();
+    assert.equal(revisionReminder?.reminder_count, 0);
     const feedback = await api(`/api/submissions/${submissionId}/audio-review`, {
       method: "POST", token: parent.token, client: "web", body: { feedback: "完成得很好" }
     });

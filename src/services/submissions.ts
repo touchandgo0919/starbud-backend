@@ -31,6 +31,21 @@ async function queueLearningIssueAnalysisSafely(env: Env, submissionId: string, 
   }
 }
 
+async function scheduleRevisionReminder(env: Env, submission: SubmissionRow, reviewedAt: string) {
+  await env.DB.prepare(
+    `INSERT INTO task_revision_reminders
+      (task_id, task_date, submission_id, review_completed_at, last_reminded_at, reminder_count)
+     SELECT ?, ?, ?, ?, NULL, 0
+     FROM tasks
+     WHERE id = ? AND revision_reminder_enabled = 1
+     ON CONFLICT(task_id, task_date)
+     DO UPDATE SET submission_id = excluded.submission_id,
+       review_completed_at = excluded.review_completed_at,
+       last_reminded_at = NULL,
+       reminder_count = 0`
+  ).bind(submission.task_id, submission.task_date, submission.id, reviewedAt, submission.task_id).run();
+}
+
 function photoDto(row: SubmissionPhotoRow): SubmissionPhotoDto {
   return {
     id: row.id,
@@ -617,6 +632,7 @@ export async function submitReview(
       ]);
     }
 
+    await scheduleRevisionReminder(env, submission, reviewedAt);
     await queueLearningIssueAnalysisSafely(env, submissionId, analysisRoundId);
     const updated = await getSubmissionRow(env, submissionId);
     return updated ? submissionDto(env, updated) : null;
@@ -711,6 +727,7 @@ export async function submitReview(
     )
   ]);
 
+  await scheduleRevisionReminder(env, submission, reviewedAt);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -787,6 +804,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
     )
   ]);
 
+  await scheduleRevisionReminder(env, submission, reviewedAt);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;

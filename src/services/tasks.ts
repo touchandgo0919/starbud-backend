@@ -118,6 +118,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     voiceContent: row.voice_content?.trim() || row.title,
     voiceReminderCount: row.voice_reminder_count,
     claimReminderEnabled: Boolean(row.claim_reminder_enabled),
+    revisionReminderEnabled: Boolean(row.revision_reminder_enabled),
     requiresPhotoUpload,
     status: taskStatus,
     occurrenceDate,
@@ -155,8 +156,8 @@ export async function createTask(env: Env, input: CreateTaskInput) {
 
   await env.DB.prepare(
     `INSERT INTO tasks
-      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, require_photo_upload, start_date, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, child_id, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, revision_reminder_enabled, require_photo_upload, start_date, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -168,6 +169,7 @@ export async function createTask(env: Env, input: CreateTaskInput) {
       values.voiceContent,
       values.voiceReminderCount,
       values.claimReminderEnabled ? 1 : 0,
+      values.revisionReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
       localTimestamp()
@@ -222,6 +224,7 @@ function validateTaskInput(env: Env, input: CreateTaskInput, fallbackStartDate =
     voiceContent,
     voiceReminderCount,
     claimReminderEnabled: input.voiceEnabled !== false && input.claimReminderEnabled === true,
+    revisionReminderEnabled: input.requiresPhotoUpload !== false && input.revisionReminderEnabled === true,
     requiresPhotoUpload: input.requiresPhotoUpload !== false,
     startDate
   };
@@ -252,6 +255,7 @@ export async function updateTaskForUser(
       voice_content = ?,
       voice_reminder_count = ?,
       claim_reminder_enabled = ?,
+      revision_reminder_enabled = ?,
       require_photo_upload = ?,
       start_date = ?
      WHERE id = ?
@@ -265,6 +269,7 @@ export async function updateTaskForUser(
       values.voiceContent,
       values.voiceReminderCount,
       values.claimReminderEnabled ? 1 : 0,
+      values.revisionReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
       values.startDate,
       taskId
@@ -931,6 +936,50 @@ export async function sendDueClaimReminders(env: Env) {
     ).bind(randomId("notification"), task.child_user_id, `「${task.title}」还没有领取，请点击去领取。`, now),
     env.DB.prepare(
        `UPDATE task_claim_reminders
+       SET last_reminded_at = ?, reminder_count = reminder_count + 1
+       WHERE task_id = ? AND task_date = ? AND reminder_count < 3`
+    ).bind(now, task.task_id, task.task_date)
+  ]));
+
+  return result.results.length;
+}
+
+export async function sendDueRevisionReminders(env: Env) {
+  const now = localTimestamp();
+  const result = await env.DB.prepare(
+    `SELECT
+      task_revision_reminders.task_id,
+      task_revision_reminders.task_date,
+      tasks.title,
+      children.child_user_id
+     FROM task_revision_reminders
+     INNER JOIN tasks ON tasks.id = task_revision_reminders.task_id
+     INNER JOIN task_submissions ON task_submissions.id = task_revision_reminders.submission_id
+     INNER JOIN children ON children.id = tasks.child_id
+     WHERE tasks.active = 1
+      AND tasks.revision_reminder_enabled = 1
+      AND children.child_user_id IS NOT NULL
+      AND task_submissions.status = 'submitted'
+      AND task_submissions.reviewed_at IS NOT NULL
+      AND task_submissions.finalized_at IS NULL
+      AND task_revision_reminders.reminder_count < 3
+      AND datetime(task_revision_reminders.review_completed_at, '+2 hours') <= datetime(?)
+      AND (
+        task_revision_reminders.last_reminded_at IS NULL
+        OR datetime(task_revision_reminders.last_reminded_at, '+2 hours') <= datetime(?)
+      )`
+  ).bind(now, now).all<{ task_id: string; task_date: string; title: string; child_user_id: string }>();
+
+  if (!result.results.length) return 0;
+
+  await env.DB.batch(result.results.flatMap((task) => [
+    env.DB.prepare(
+      `INSERT INTO notifications
+       (id, recipient_user_id, type, title, content, created_at)
+       VALUES (?, ?, 'revision_reminder', '星星芽AI助手 修改提醒', ?, ?)`
+    ).bind(randomId("notification"), task.child_user_id, `「${task.title}」批改后还需要修改，请尽快完成并重新提交。`, now),
+    env.DB.prepare(
+      `UPDATE task_revision_reminders
        SET last_reminded_at = ?, reminder_count = reminder_count + 1
        WHERE task_id = ? AND task_date = ? AND reminder_count < 3`
     ).bind(now, task.task_id, task.task_date)

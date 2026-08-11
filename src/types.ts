@@ -107,6 +107,7 @@ export interface TaskRow {
   voice_content: string | null;
   voice_reminder_count: number;
   claim_reminder_enabled: number;
+  revision_reminder_enabled: number;
   require_photo_upload: number;
   active: number;
   start_date: string | null;
@@ -134,6 +135,7 @@ export interface TaskDto {
   voiceContent: string;
   voiceReminderCount: number;
   claimReminderEnabled: boolean;
+  revisionReminderEnabled: boolean;
   requiresPhotoUpload: boolean;
   status: "pending" | "completed" | "missed";
   occurrenceDate: string | null;
@@ -159,6 +161,7 @@ export interface CreateTaskInput {
   voiceContent?: string;
   voiceReminderCount?: number;
   claimReminderEnabled?: boolean;
+  revisionReminderEnabled?: boolean;
   requiresPhotoUpload?: boolean;
   startDate?: string;
 }
