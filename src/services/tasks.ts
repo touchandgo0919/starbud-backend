@@ -1,5 +1,5 @@
 import { localTimestamp, randomId } from "../utils";
-import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, TaskRow } from "../types";
+import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, TaskOccurrenceOverrideRow, TaskRow } from "../types";
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
 
@@ -80,6 +80,34 @@ function shouldRunOnDate(
   return row.repeat_type === "weekly"
     ? start.weekday === today.weekday
     : start.key === today.key;
+}
+
+function withOccurrenceOverride(row: TaskRow, override?: TaskOccurrenceOverrideRow): TaskRow {
+  if (!override) return row;
+  return {
+    ...row,
+    title: override.title,
+    schedule_time: override.schedule_time,
+    repeat_type: override.repeat_type,
+    voice_enable: override.voice_enable,
+    voice_content: override.voice_content,
+    voice_reminder_count: override.voice_reminder_count,
+    claim_reminder_enabled: override.claim_reminder_enabled,
+    revision_reminder_enabled: override.revision_reminder_enabled,
+    require_photo_upload: override.require_photo_upload,
+    start_date: override.start_date,
+    end_date: override.end_date
+  };
+}
+
+async function getOccurrenceOverrides(env: Env, taskIds: string[], from: string, to: string) {
+  if (!taskIds.length) return new Map<string, TaskOccurrenceOverrideRow>();
+  const placeholders = taskIds.map(() => "?").join(", ");
+  const result = await env.DB.prepare(
+    `SELECT * FROM task_occurrence_overrides
+     WHERE task_id IN (${placeholders}) AND task_date BETWEEN ? AND ?`
+  ).bind(...taskIds, from, to).all<TaskOccurrenceOverrideRow>();
+  return new Map(result.results.map((row) => [`${row.task_id}:${row.task_date}`, row]));
 }
 
 export function todayKey(env: Env, date = new Date()) {
@@ -253,7 +281,72 @@ export async function updateTaskForUser(
     return null;
   }
 
-  const values = validateTaskInput(env, input, task.startDate);
+  const editScope = input.editScope;
+  if (editScope !== "single" && editScope !== "future") {
+    throw new Error("请选择编辑范围。");
+  }
+  const effectiveDate = input.effectiveDate?.trim() || todayKey(env);
+  if (!parseDateKey(effectiveDate)) {
+    throw new Error("effectiveDate must use YYYY-MM-DD format.");
+  }
+  if (effectiveDate < todayKey(env)) {
+    throw new Error("历史任务不可编辑，请选择今天或未来日期。");
+  }
+  const values = validateTaskInput(env, input, effectiveDate);
+
+  if (!shouldRunOnDate(env, {
+    repeat_type: task.repeatType,
+    start_date: task.startDate,
+    end_date: task.endDate,
+    created_at: task.createdAt
+  }, parseDateKey(effectiveDate) || undefined)) {
+    throw new Error("该日期没有此任务，无法编辑。");
+  }
+
+  if (editScope === "single") {
+    await env.DB.prepare(
+      `INSERT INTO task_occurrence_overrides
+        (task_id, task_date, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, revision_reminder_enabled, require_photo_upload, start_date, end_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(task_id, task_date) DO UPDATE SET
+        title = excluded.title, schedule_time = excluded.schedule_time, repeat_type = excluded.repeat_type,
+        voice_enable = excluded.voice_enable, voice_content = excluded.voice_content,
+        voice_reminder_count = excluded.voice_reminder_count, claim_reminder_enabled = excluded.claim_reminder_enabled,
+        revision_reminder_enabled = excluded.revision_reminder_enabled, require_photo_upload = excluded.require_photo_upload,
+        start_date = excluded.start_date, end_date = excluded.end_date, created_at = excluded.created_at`
+    ).bind(
+      taskId, effectiveDate, values.title, values.scheduleTime, values.repeatType,
+      values.voiceEnabled ? 1 : 0, values.voiceContent, values.voiceReminderCount,
+      values.claimReminderEnabled ? 1 : 0, values.revisionReminderEnabled ? 1 : 0,
+      values.requiresPhotoUpload ? 1 : 0, values.startDate, values.endDate, localTimestamp()
+    ).run();
+    return getTaskById(env, taskId, effectiveDate, true);
+  }
+
+  // Seal every already occurred instance before replacing the live definition.
+  const historicalDates = dateKeysBetween(task.startDate, dateKeyOffset(effectiveDate, -1))
+    .filter((dateKey) => shouldRunOnDate(env, {
+      repeat_type: task.repeatType,
+      start_date: task.startDate,
+      end_date: task.endDate,
+      created_at: task.createdAt
+    }, parseDateKey(dateKey) || undefined));
+  const sealedAt = localTimestamp();
+  if (historicalDates.length) {
+    const statements = historicalDates.map((dateKey) => env.DB.prepare(
+      `INSERT OR IGNORE INTO task_occurrence_overrides
+        (task_id, task_date, title, schedule_time, repeat_type, voice_enable, voice_content, voice_reminder_count, claim_reminder_enabled, revision_reminder_enabled, require_photo_upload, start_date, end_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      taskId, dateKey, task.title, task.scheduleTime, task.repeatType, task.voiceEnabled ? 1 : 0,
+      task.voiceContent, task.voiceReminderCount, task.claimReminderEnabled ? 1 : 0,
+      task.revisionReminderEnabled ? 1 : 0, task.requiresPhotoUpload ? 1 : 0,
+      task.startDate, task.endDate, sealedAt
+    ));
+    for (let index = 0; index < statements.length; index += 100) {
+      await env.DB.batch(statements.slice(index, index + 100));
+    }
+  }
   await env.DB.prepare(
     `UPDATE tasks
      SET title = ?,
@@ -280,13 +373,13 @@ export async function updateTaskForUser(
       values.claimReminderEnabled ? 1 : 0,
       values.revisionReminderEnabled ? 1 : 0,
       values.requiresPhotoUpload ? 1 : 0,
-      values.startDate,
+      effectiveDate,
       values.endDate,
       taskId
     )
     .run();
 
-  return getTaskById(env, taskId);
+  return getTaskById(env, taskId, effectiveDate, true);
 }
 
 export async function createTaskForUser(env: Env, user: AuthUser, input: CreateTaskInput) {
@@ -353,7 +446,10 @@ export async function getTodayTasks(env: Env, childId?: string) {
     .bind(date, date, date, date, childId)
     .all<TaskRow>();
 
+  const overrides = await getOccurrenceOverrides(env, result.results.map((row) => row.id), date, date);
+
   return result.results
+    .map((row) => withOccurrenceOverride(row, overrides.get(`${row.id}:${date}`)))
     .filter((row) => shouldRunOnDate(env, row))
     .map((row) => toTaskDto(row, date));
 }
@@ -641,12 +737,14 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
   const deletedOccurrences = new Set(
     deletionResult.results.map((deletion) => `${deletion.task_id}:${deletion.task_date}`)
   );
+  const overrides = await getOccurrenceOverrides(env, taskResult.results.map((row) => row.id), from, to);
 
   return dateKeysBetween(from, to).flatMap((dateKey) => {
     const occurrenceDate = parseDateKey(dateKey);
     if (!occurrenceDate) return [];
 
     return taskResult.results
+      .map((row) => withOccurrenceOverride(row, overrides.get(`${row.id}:${dateKey}`)))
       .filter((row) => shouldRunOnDate(env, row, occurrenceDate))
       .filter((row) => !deletedOccurrences.has(`${row.id}:${dateKey}`))
       .map((row) => {
@@ -710,7 +808,15 @@ async function getCompletedTasks(env: Env, childId: string) {
     .bind(childId)
     .all<TaskRow>();
 
-  return result.results.map((row) => toTaskDto(row));
+  const dates = result.results.map((row) => row.record_date).filter((date): date is string => Boolean(date));
+  if (!dates.length) return [];
+  const overrides = await getOccurrenceOverrides(
+    env,
+    result.results.map((row) => row.id),
+    dates.reduce((minimum, date) => date < minimum ? date : minimum, dates[0]),
+    dates.reduce((maximum, date) => date > maximum ? date : maximum, dates[0])
+  );
+  return result.results.map((row) => toTaskDto(withOccurrenceOverride(row, overrides.get(`${row.id}:${row.record_date}`))));
 }
 
 export async function completeTask(env: Env, taskId: string, taskDate = todayKey(env)) {
@@ -1167,14 +1273,16 @@ export async function getTaskById(env: Env, taskId: string, date = todayKey(env)
     .first<TaskRow>();
 
   if (!row) return null;
-  if (requireOccurrence && !shouldRunOnDate(env, row, parseDateKey(date) || undefined)) return null;
+  const override = (await getOccurrenceOverrides(env, [taskId], date, date)).get(`${taskId}:${date}`);
+  const resolvedRow = withOccurrenceOverride(row, override);
+  if (requireOccurrence && !shouldRunOnDate(env, resolvedRow, parseDateKey(date) || undefined)) return null;
   if (requireOccurrence) {
     const deleted = await env.DB.prepare(
       "SELECT 1 FROM task_occurrence_deletions WHERE task_id = ? AND task_date = ? LIMIT 1"
     ).bind(taskId, date).first();
     if (deleted) return null;
   }
-  return toTaskDto(row, date);
+  return toTaskDto(resolvedRow, date);
 }
 
 export async function getTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {

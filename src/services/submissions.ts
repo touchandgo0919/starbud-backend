@@ -241,13 +241,16 @@ async function getSubmissionRow(env: Env, submissionId: string) {
   return env.DB.prepare(
     `SELECT
       task_submissions.*,
-      tasks.title AS task_title,
-      tasks.schedule_time AS schedule_time,
-      tasks.require_photo_upload AS require_photo_upload,
+      COALESCE(task_occurrence_overrides.title, tasks.title) AS task_title,
+      COALESCE(task_occurrence_overrides.schedule_time, tasks.schedule_time) AS schedule_time,
+      COALESCE(task_occurrence_overrides.require_photo_upload, tasks.require_photo_upload) AS require_photo_upload,
       children.name AS child_name
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
+     LEFT JOIN task_occurrence_overrides
+      ON task_occurrence_overrides.task_id = task_submissions.task_id
+      AND task_occurrence_overrides.task_date = task_submissions.task_date
      INNER JOIN children
       ON children.id = task_submissions.child_id
      WHERE task_submissions.id = ?
@@ -261,13 +264,16 @@ async function getSubmissionRowForDeletion(env: Env, submissionId: string) {
   return env.DB.prepare(
     `SELECT
       task_submissions.*,
-      COALESCE(tasks.title, '已删除任务') AS task_title,
-      COALESCE(tasks.schedule_time, '') AS schedule_time,
-      COALESCE(tasks.require_photo_upload, 1) AS require_photo_upload,
+      COALESCE(task_occurrence_overrides.title, tasks.title, '已删除任务') AS task_title,
+      COALESCE(task_occurrence_overrides.schedule_time, tasks.schedule_time, '') AS schedule_time,
+      COALESCE(task_occurrence_overrides.require_photo_upload, tasks.require_photo_upload, 1) AS require_photo_upload,
       children.name AS child_name
      FROM task_submissions
      LEFT JOIN tasks
       ON tasks.id = task_submissions.task_id
+     LEFT JOIN task_occurrence_overrides
+      ON task_occurrence_overrides.task_id = task_submissions.task_id
+      AND task_occurrence_overrides.task_date = task_submissions.task_date
      INNER JOIN children
       ON children.id = task_submissions.child_id
      WHERE task_submissions.id = ?
@@ -855,7 +861,7 @@ export async function listSubmissions(
   }
 
   if (options.keyword) {
-    conditions.push("LOWER(tasks.title) LIKE ?");
+    conditions.push("LOWER(COALESCE(task_occurrence_overrides.title, tasks.title)) LIKE ?");
     values.push(`%${options.keyword.trim().toLowerCase()}%`);
   }
 
@@ -872,6 +878,9 @@ export async function listSubmissions(
     `SELECT COUNT(*) AS count
      FROM task_submissions
      INNER JOIN tasks ON tasks.id = task_submissions.task_id
+     LEFT JOIN task_occurrence_overrides
+      ON task_occurrence_overrides.task_id = task_submissions.task_id
+      AND task_occurrence_overrides.task_date = task_submissions.task_date
      WHERE ${where}`
   )
     .bind(...values)
@@ -880,12 +889,15 @@ export async function listSubmissions(
   const result = await env.DB.prepare(
     `SELECT
       task_submissions.*,
-      tasks.title AS task_title,
-      tasks.schedule_time AS schedule_time,
+      COALESCE(task_occurrence_overrides.title, tasks.title) AS task_title,
+      COALESCE(task_occurrence_overrides.schedule_time, tasks.schedule_time) AS schedule_time,
       children.name AS child_name
      FROM task_submissions
      INNER JOIN tasks
       ON tasks.id = task_submissions.task_id
+     LEFT JOIN task_occurrence_overrides
+      ON task_occurrence_overrides.task_id = task_submissions.task_id
+      AND task_occurrence_overrides.task_date = task_submissions.task_date
      INNER JOIN children
       ON children.id = task_submissions.child_id
      WHERE ${where}
@@ -1080,9 +1092,13 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
 
 export async function getTaskSubmissionForUser(env: Env, user: AuthUser, taskId: string, taskDate: string) {
   const row = await env.DB.prepare(
-    `SELECT task_submissions.*, tasks.title AS task_title, tasks.schedule_time AS schedule_time,
-      tasks.require_photo_upload AS require_photo_upload
+    `SELECT task_submissions.*, COALESCE(task_occurrence_overrides.title, tasks.title) AS task_title,
+      COALESCE(task_occurrence_overrides.schedule_time, tasks.schedule_time) AS schedule_time,
+      COALESCE(task_occurrence_overrides.require_photo_upload, tasks.require_photo_upload) AS require_photo_upload
      FROM task_submissions INNER JOIN tasks ON tasks.id = task_submissions.task_id
+     LEFT JOIN task_occurrence_overrides
+      ON task_occurrence_overrides.task_id = task_submissions.task_id
+      AND task_occurrence_overrides.task_date = task_submissions.task_date
      WHERE task_submissions.task_id = ? AND task_submissions.task_date = ? LIMIT 1`
   ).bind(taskId, taskDate).first<SubmissionRow>();
   if (!row) return null;

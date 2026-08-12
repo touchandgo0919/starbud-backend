@@ -167,6 +167,25 @@ export interface CreateTaskInput {
   requiresPhotoUpload?: boolean;
   startDate?: string;
   endDate?: string | null;
+  editScope?: "single" | "future";
+  effectiveDate?: string;
+}
+
+export interface TaskOccurrenceOverrideRow {
+  task_id: string;
+  task_date: string;
+  title: string;
+  schedule_time: string;
+  repeat_type: RepeatType;
+  voice_enable: number;
+  voice_content: string | null;
+  voice_reminder_count: number;
+  claim_reminder_enabled: number;
+  revision_reminder_enabled: number;
+  require_photo_upload: number;
+  start_date: string;
+  end_date: string | null;
+  created_at: string;
 }
 
 export interface RepairTaskStatusInput {
