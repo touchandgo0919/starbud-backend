@@ -217,7 +217,6 @@ describe("Starbud Worker API", () => {
       }, { once: true });
     });
     assert.equal(connectedSignal.type, "connected");
-    realtimeSocket.close(1000, "test-complete");
 
     const me = await api("/api/me", { token: parent.token, client: "web" });
     assert.equal(me.body.user.username, "zhaotao");
@@ -279,14 +278,60 @@ describe("Starbud Worker API", () => {
     });
     const taskId = taskCreated.body.task.id;
 
+    const claimRealtimeSignal = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Realtime reminder signal timed out")), 1000);
+      realtimeSocket.addEventListener("message", (event) => {
+        clearTimeout(timeout);
+        resolve(JSON.parse(String(event.data)));
+      }, { once: true });
+    });
     await api(`/api/tasks/${taskId}/remind`, {
       method: "POST", token: parent.token, client: "mini_program",
       body: { taskDate: date, reminderType: "claim" }
     });
+    assert.equal((await claimRealtimeSignal).type, "notifications_changed");
     const claimNotifications = await api("/api/notifications", {
       token: child.token, client: "mini_program"
     });
-    assert.ok(claimNotifications.body.notifications.some((item) => item.type === "claim_reminder" && item.content.includes(taskCreated.body.task.title)));
+    const claimNotification = claimNotifications.body.notifications.find((item) => item.type === "claim_reminder" && item.content.includes(taskCreated.body.task.title));
+    assert.ok(claimNotification);
+    await api(`/api/notifications/${claimNotification.id}/read`, {
+      method: "POST", token: child.token, client: "mini_program"
+    });
+    const desktopNotificationsAfterMiniRead = await api("/api/notifications?channel=desktop", {
+      token: child.token, client: "desktop_app"
+    });
+    assert.ok(desktopNotificationsAfterMiniRead.body.notifications.some((item) => item.id === claimNotification.id));
+    await api(`/api/notifications/${claimNotification.id}/desktop-delivered`, {
+      method: "POST", token: child.token, client: "desktop_app"
+    });
+    await api(`/api/notifications/${claimNotification.id}/reminder-result`, {
+      method: "POST", token: child.token, client: "desktop_app",
+      body: { status: "success" }
+    });
+    const desktopNotificationsAfterDelivery = await api("/api/notifications?channel=desktop", {
+      token: child.token, client: "desktop_app"
+    });
+    assert.ok(!desktopNotificationsAfterDelivery.body.notifications.some((item) => item.id === claimNotification.id));
+    const reminderRecords = await api(`/api/reminder-records?childId=${targetChild.id}`, {
+      token: parent.token, client: "web"
+    });
+    const claimReminderRecord = reminderRecords.body.records.find((item) => item.notificationId === claimNotification.id);
+    assert.equal(claimReminderRecord.source, "mini_program");
+    assert.equal(claimReminderRecord.taskId, taskId);
+    assert.equal(claimReminderRecord.pushStatus, "pushed");
+    assert.equal(claimReminderRecord.pushConnectionCount, 1);
+    assert.ok(claimReminderRecord.receivedAt);
+    assert.equal(claimReminderRecord.reminderStatus, "success");
+    await api(`/api/tasks/${taskId}/reminder-result`, {
+      method: "POST", token: child.token, client: "desktop_app",
+      body: { taskDate: date, title: "定时提醒", content: "完成自动化测试任务", attempt: 1, status: "success" }
+    });
+    const scheduledRecords = await api(`/api/reminder-records?reminderType=scheduled_voice&childId=${targetChild.id}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(scheduledRecords.body.records.some((item) => item.taskId === taskId && item.reminderStatus === "success"));
+    realtimeSocket.close(1000, "test-complete");
 
     await api(`/api/ai/home-overview?childId=${targetChild.id}&days=7`, {
       token: child.token, client: "mini_program", status: 403

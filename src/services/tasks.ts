@@ -3,6 +3,7 @@ import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, Ta
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
 import { publishNotificationChanged } from "./realtime";
+import { annotateNotificationReminder } from "./reminder-records";
 
 const repeatTypes = new Set(["once", "daily", "weekdays", "weekly"]);
 const weekdayNumbers: Record<string, number> = {
@@ -1011,6 +1012,7 @@ export async function repairTaskStatusForUser(
     ]);
   } else {
     const completedAt = localTimestamp();
+    let notificationId: string | null = null;
     const statements = [
       env.DB.prepare(
         `INSERT OR IGNORE INTO task_claims (id, task_id, child_id, task_date, claimed_at)
@@ -1043,13 +1045,14 @@ export async function repairTaskStatusForUser(
           .bind(completedAt, submission.id)
       );
       if (submission.child_user_id) {
+        notificationId = randomId("notification");
         statements.push(
           env.DB.prepare(
             `INSERT INTO notifications
              (id, recipient_user_id, submission_id, type, title, content, created_at)
              VALUES (?, ?, ?, 'task_completed', '任务已完成', ?, ?)`
           ).bind(
-            randomId("notification"),
+            notificationId,
             submission.child_user_id,
             submission.id,
             `你的「${submission.task_title}」已由家长确认完成。`,
@@ -1060,7 +1063,9 @@ export async function repairTaskStatusForUser(
     }
 
     await env.DB.batch(statements);
-    await publishNotificationChanged(env, submission?.child_user_id);
+    if (notificationId) {
+      await publishNotificationChanged(env, submission?.child_user_id, notificationId);
+    }
   }
 
   return getTaskById(env, taskId, date);
@@ -1070,7 +1075,7 @@ export async function remindTaskForUser(
   env: Env,
   user: AuthUser,
   taskId: string,
-  input: { taskDate?: string; reminderType?: string } = {}
+  input: { taskDate?: string; reminderType?: string; source?: string } = {}
 ) {
   if (user.role === "child") {
     throw new Error("仅家长或管理员可以发起提醒。");
@@ -1111,15 +1116,22 @@ export async function remindTaskForUser(
       ? { type: "claim_reminder", title: "星星芽AI助手 领取提醒", content: `「${task.title}」还没有领取，请点击去领取。` }
       : { type: "voice_reminder", title: "星星芽AI助手 完成提醒", content: `「${task.title}」正在进行中，请记得完成并提交。` };
 
+  const notificationId = randomId("notification");
   await env.DB.prepare(
     `INSERT INTO notifications
      (id, recipient_user_id, type, title, content, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
   )
-    .bind(randomId("notification"), child.child_user_id, reminder.type, reminder.title, reminder.content, localTimestamp())
+    .bind(notificationId, child.child_user_id, reminder.type, reminder.title, reminder.content, localTimestamp())
     .run();
 
-  await publishNotificationChanged(env, child.child_user_id);
+  await annotateNotificationReminder(env, notificationId, {
+    taskId,
+    taskDate: date,
+    source: input.source || "web"
+  });
+
+  await publishNotificationChanged(env, child.child_user_id, notificationId);
 
   return task;
 }
@@ -1190,12 +1202,13 @@ export async function sendDueClaimReminders(env: Env) {
 
   if (!result.results.length) return 0;
 
-  await env.DB.batch(result.results.flatMap((task) => [
+  const reminders = result.results.map((task) => ({ ...task, notification_id: randomId("notification") }));
+  await env.DB.batch(reminders.flatMap((task) => [
     env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, type, title, content, created_at)
        VALUES (?, ?, 'claim_reminder', '星星芽AI助手 领取提醒', ?, ?)`
-    ).bind(randomId("notification"), task.child_user_id, `「${task.title}」还没有领取，请点击去领取。`, now),
+    ).bind(task.notification_id, task.child_user_id, `「${task.title}」还没有领取，请点击去领取。`, now),
     env.DB.prepare(
        `UPDATE task_claim_reminders
        SET last_reminded_at = ?, reminder_count = reminder_count + 1
@@ -1203,7 +1216,7 @@ export async function sendDueClaimReminders(env: Env) {
     ).bind(now, task.task_id, task.task_date)
   ]));
 
-  await Promise.all(result.results.map((task) => publishNotificationChanged(env, task.child_user_id)));
+  await Promise.all(reminders.map((task) => publishNotificationChanged(env, task.child_user_id, task.notification_id)));
 
   return result.results.length;
 }
@@ -1241,12 +1254,13 @@ export async function sendDueRevisionReminders(env: Env) {
 
   if (!result.results.length) return 0;
 
-  await env.DB.batch(result.results.flatMap((task) => [
+  const reminders = result.results.map((task) => ({ ...task, notification_id: randomId("notification") }));
+  await env.DB.batch(reminders.flatMap((task) => [
     env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, type, title, content, created_at)
        VALUES (?, ?, 'revision_reminder', '星星芽AI助手 修改提醒', ?, ?)`
-    ).bind(randomId("notification"), task.child_user_id, `「${task.title}」批改后还需要修改，请尽快完成并重新提交。`, now),
+    ).bind(task.notification_id, task.child_user_id, `「${task.title}」批改后还需要修改，请尽快完成并重新提交。`, now),
     env.DB.prepare(
       `UPDATE task_revision_reminders
        SET last_reminded_at = ?, reminder_count = reminder_count + 1
@@ -1254,7 +1268,7 @@ export async function sendDueRevisionReminders(env: Env) {
     ).bind(now, task.task_id, task.task_date)
   ]));
 
-  await Promise.all(result.results.map((task) => publishNotificationChanged(env, task.child_user_id)));
+  await Promise.all(reminders.map((task) => publishNotificationChanged(env, task.child_user_id, task.notification_id)));
 
   return result.results.length;
 }

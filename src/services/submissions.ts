@@ -16,6 +16,7 @@ import { childIdForUser, listChildren } from "./children";
 import { queueLearningIssueAnalysis } from "./ai-learning-issues";
 import { getTaskById, todayKey } from "./tasks";
 import { publishNotificationChanged } from "./realtime";
+import { markReminderReceived } from "./reminder-records";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const maxPhotoBytes = 10 * 1024 * 1024;
@@ -624,6 +625,7 @@ export async function submitReview(
 
     const image = inputImages[0];
     const accessToken = randomId("review-file");
+    const notificationId = randomId("notification");
 
     let analysisRoundId = "";
     if (replaceReviewImageId.startsWith("legacy-")) {
@@ -655,7 +657,7 @@ export async function submitReview(
           `INSERT INTO notifications
            (id, recipient_user_id, submission_id, type, title, content, created_at)
            VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
-        ).bind(randomId("notification"), recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
       ]);
     } else {
       const reviewImage = await env.DB.prepare(
@@ -689,12 +691,12 @@ export async function submitReview(
           `INSERT INTO notifications
            (id, recipient_user_id, submission_id, type, title, content, created_at)
            VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
-        ).bind(randomId("notification"), recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
       ]);
     }
 
     await scheduleRevisionReminder(env, submission, reviewedAt);
-    await publishNotificationChanged(env, recipient.child_user_id);
+    await publishNotificationChanged(env, recipient.child_user_id, notificationId);
     await queueLearningIssueAnalysisSafely(env, submissionId, analysisRoundId);
     const updated = await getSubmissionRow(env, submissionId);
     return updated ? submissionDto(env, updated) : null;
@@ -729,6 +731,7 @@ export async function submitReview(
     return { reviewId, accessToken, objectKey, image };
   }));
   const latestImage = reviewImages[reviewImages.length - 1];
+  const notificationId = randomId("notification");
 
   await env.DB.batch([
     env.DB.prepare(
@@ -781,7 +784,7 @@ export async function submitReview(
        (id, recipient_user_id, submission_id, type, title, content, created_at)
        VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?, ?)`
     ).bind(
-      randomId("notification"),
+      notificationId,
       recipient.child_user_id,
       submissionId,
       `你的「${submission.task_title}」已完成 ${reviewImages.length} 张图片批改，快去看看吧！`,
@@ -790,7 +793,7 @@ export async function submitReview(
   ]);
 
   await scheduleRevisionReminder(env, submission, reviewedAt);
-  await publishNotificationChanged(env, recipient.child_user_id);
+  await publishNotificationChanged(env, recipient.child_user_id, notificationId);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -833,6 +836,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
   ).bind(submissionId).first<{ sequence: number }>())?.sequence || 1;
   const roundId = randomId("round");
   const roundAccessToken = randomId("review-round");
+  const notificationId = randomId("notification");
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE task_submissions SET audio_feedback = ?, reviewed_at = ? WHERE id = ?"
@@ -859,7 +863,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
        (id, recipient_user_id, submission_id, type, title, content, created_at)
        VALUES (?, ?, ?, 'review_completed', '录音评价已提交', ?, ?)`
     ).bind(
-      randomId("notification"),
+      notificationId,
       recipient.child_user_id,
       submissionId,
       `你的「${submission.task_title}」录音已收到评价，快去看看吧！`,
@@ -868,7 +872,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
   ]);
 
   await scheduleRevisionReminder(env, submission, reviewedAt);
-  await publishNotificationChanged(env, recipient.child_user_id);
+  await publishNotificationChanged(env, recipient.child_user_id, notificationId);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -1000,6 +1004,10 @@ export async function deleteSubmission(env: Env, user: AuthUser, submissionId: s
      WHERE submission_review_rounds.submission_id = ?`
   ).bind(submissionId).all<ReviewRoundImageRow>();
   await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE reminder_records SET notification_id = NULL, submission_id = NULL
+       WHERE submission_id = ? OR notification_id IN (SELECT id FROM notifications WHERE submission_id = ?)`
+    ).bind(submissionId, submissionId),
     env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_audios WHERE submission_id = ?").bind(submissionId),
@@ -1091,7 +1099,11 @@ export async function reopenSubmissionForResubmit(env: Env, user: AuthUser, subm
 
   await env.DB.batch([
     ...(legacyRoundStatement ? [legacyRoundStatement] : []),
-    env.DB.prepare("DELETE FROM notifications WHERE submission_id = ?").bind(submissionId),
+    env.DB.prepare(
+      `UPDATE notifications
+       SET read_at = COALESCE(read_at, ?), desktop_delivered_at = COALESCE(desktop_delivered_at, ?)
+       WHERE submission_id = ?`
+    ).bind(localTimestamp(), localTimestamp(), submissionId),
     env.DB.prepare("DELETE FROM task_submission_photos WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare("DELETE FROM task_submission_audios WHERE submission_id = ?").bind(submissionId),
     env.DB.prepare(
@@ -1128,6 +1140,7 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
   )
     .bind(submission.child_id)
     .first<{ child_user_id: string | null }>();
+  const notificationId = recipient?.child_user_id ? randomId("notification") : null;
   await env.DB.batch([
     env.DB.prepare("UPDATE task_submissions SET finalized_at = ? WHERE id = ?").bind(closedAt, submissionId),
     env.DB.prepare(
@@ -1141,14 +1154,16 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
        (id, recipient_user_id, submission_id, type, title, content, created_at)
        VALUES (?, ?, ?, 'task_completed', '任务已完成', ?, ?)`
     ).bind(
-      randomId("notification"),
+      notificationId,
       recipient.child_user_id,
       submissionId,
       `你的「${submission.task_title}」已由家长确认完成。`,
       closedAt
     )] : [])
   ]);
-  await publishNotificationChanged(env, recipient?.child_user_id);
+  if (notificationId) {
+    await publishNotificationChanged(env, recipient?.child_user_id, notificationId);
+  }
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }
@@ -1170,11 +1185,12 @@ export async function getTaskSubmissionForUser(env: Env, user: AuthUser, taskId:
   return submissionDto(env, row);
 }
 
-export async function listNotifications(env: Env, user: AuthUser) {
+export async function listNotifications(env: Env, user: AuthUser, channel: "mini" | "desktop" = "mini") {
+  const pendingColumn = channel === "desktop" ? "desktop_delivered_at" : "read_at";
   const result = await env.DB.prepare(
     `SELECT *
      FROM notifications
-     WHERE recipient_user_id = ?
+     WHERE recipient_user_id = ? AND ${pendingColumn} IS NULL
      ORDER BY created_at DESC
      LIMIT 30`
   )
@@ -1188,6 +1204,7 @@ export async function listNotifications(env: Env, user: AuthUser) {
     title: row.title,
     content: row.content,
     readAt: row.read_at,
+    desktopDeliveredAt: row.desktop_delivered_at,
     createdAt: row.created_at
   }));
 }
@@ -1201,6 +1218,19 @@ export async function markNotificationRead(env: Env, user: AuthUser, notificatio
     .bind(localTimestamp(), notificationId, user.id)
     .run();
   return result.meta.changes > 0;
+}
+
+export async function markNotificationDesktopDelivered(env: Env, user: AuthUser, notificationId: string) {
+  const result = await env.DB.prepare(
+    `UPDATE notifications
+     SET desktop_delivered_at = ?
+     WHERE id = ? AND recipient_user_id = ? AND desktop_delivered_at IS NULL`
+  )
+    .bind(localTimestamp(), notificationId, user.id)
+    .run();
+  const updated = result.meta.changes > 0;
+  if (updated) await markReminderReceived(env, notificationId);
+  return updated;
 }
 
 export async function getSubmissionPhotoObject(

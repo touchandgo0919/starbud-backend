@@ -301,6 +301,7 @@ export interface NotificationRow {
   title: string;
   content: string;
   read_at: string | null;
+  desktop_delivered_at: string | null;
   created_at: string;
 }
 
@@ -311,6 +312,7 @@ export interface NotificationDto {
   title: string;
   content: string;
   readAt: string | null;
+  desktopDeliveredAt: string | null;
   createdAt: string;
 }
 

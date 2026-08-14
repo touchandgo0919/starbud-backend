@@ -16,6 +16,7 @@ import {
   getSubmissionPhotoObject,
   listNotifications,
   listSubmissions,
+  markNotificationDesktopDelivered,
   markNotificationRead,
   reopenSubmissionForResubmit,
   submitAudioReview,
@@ -156,6 +157,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const finalizeReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/finalize-review$/);
   const deleteSubmissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
   const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
+  const notificationDesktopDeliveredMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/desktop-delivered$/);
   const handlesPath = url.pathname === "/api/submissions"
     || url.pathname === "/api/notifications"
     || Boolean(createMatch)
@@ -168,7 +170,8 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(resubmitMatch)
     || Boolean(finalizeReviewMatch)
     || Boolean(deleteSubmissionMatch)
-    || Boolean(notificationReadMatch);
+    || Boolean(notificationReadMatch)
+    || Boolean(notificationDesktopDeliveredMatch);
 
   if (!handlesPath) {
     return null;
@@ -217,7 +220,8 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/notifications") {
-      return jsonResponse({ notifications: await listNotifications(env, user) });
+      const channel = url.searchParams.get("channel") === "desktop" ? "desktop" : "mini";
+      return jsonResponse({ notifications: await listNotifications(env, user, channel) });
     }
 
     if (request.method === "POST" && createMatch) {
@@ -313,6 +317,11 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
 
     if (request.method === "POST" && notificationReadMatch) {
       const updated = await markNotificationRead(env, user, notificationReadMatch[1]);
+      return jsonResponse({ ok: updated });
+    }
+
+    if (request.method === "POST" && notificationDesktopDeliveredMatch) {
+      const updated = await markNotificationDesktopDelivered(env, user, notificationDesktopDeliveredMatch[1]);
       return jsonResponse({ ok: updated });
     }
   } catch (error) {

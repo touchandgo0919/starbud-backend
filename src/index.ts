@@ -3,6 +3,7 @@ import { handleAuth } from "./routes/auth";
 import { handleAccessEvents } from "./routes/access-events";
 import { handleAi } from "./routes/ai";
 import { handleFamilies } from "./routes/families";
+import { handleReminderRecords } from "./routes/reminder-records";
 import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
@@ -120,6 +121,12 @@ export default {
 
     if (submissionResponse) {
       return trackedResponse(request, env, url, submissionResponse);
+    }
+
+    const reminderRecordResponse = await handleReminderRecords(request, env, url);
+
+    if (reminderRecordResponse) {
+      return trackedResponse(request, env, url, reminderRecordResponse);
     }
 
     const taskResponse = await handleTasks(request, env, url);

@@ -137,7 +137,10 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
   if (request.method === "POST" && remindMatch) {
     const input = (await request.json().catch(() => ({}))) as { taskDate?: string; reminderType?: string };
     try {
-      const task = await remindTaskForUser(env, user, remindMatch[1], input);
+      const task = await remindTaskForUser(env, user, remindMatch[1], {
+        ...input,
+        source: request.headers.get("x-starbud-client") || "web"
+      });
       return task ? jsonResponse({ task }) : notFound();
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "提醒发送失败。");
