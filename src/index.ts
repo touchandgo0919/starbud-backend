@@ -12,7 +12,19 @@ import { generateDailyAiAnalyses, shouldRunDailyAiAnalysis } from "./services/ai
 import { processPendingLearningIssueAnalyses } from "./services/ai-learning-issues";
 import { recordApiAccessEvent } from "./services/access-events";
 import { sendDueClaimReminders, sendDueRevisionReminders } from "./services/tasks";
+import { UserRealtime } from "./services/realtime";
+import { verifyToken } from "./services/auth";
 import type { Env } from "./types";
+
+export { UserRealtime };
+
+function realtimeToken(request: Request) {
+  const protocols = (request.headers.get("sec-websocket-protocol") || "")
+    .split(",")
+    .map((value) => value.trim());
+  const encoded = protocols.find((value) => value.startsWith("token."));
+  return encoded?.slice("token.".length) || "";
+}
 
 async function trackedResponse(request: Request, env: Env, url: URL, response: Response) {
   try {
@@ -42,6 +54,17 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/api/realtime") {
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+        return jsonResponse({ error: "Expected WebSocket upgrade." }, { status: 426 });
+      }
+      const user = await verifyToken(env, realtimeToken(request));
+      if (!user || user.role !== "child") {
+        return jsonResponse({ error: "Unauthorized." }, { status: 401 });
+      }
+      return env.USER_REALTIME.getByName(user.id).fetch(request);
+    }
 
     if (request.method === "GET" && url.pathname === "/health") {
       const authConfigured = isAuthConfigured(env);

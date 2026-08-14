@@ -8,6 +8,7 @@ import {
   deleteTaskForUser,
   getTaskForUser,
   getTodayTasksForUser,
+  enrichTaskAttachmentSummaries,
   listTaskDefinitionsForUser,
   listTasksForUser,
   remindTaskForUser,
@@ -77,15 +78,18 @@ export async function handleTasks(request: Request, env: Env, url: URL) {
         dateTo: url.searchParams.get("dateTo") || undefined
       });
     const page = positiveInteger(url.searchParams.get("page"));
+    const includeAttachments = url.searchParams.get("includeAttachments") === "true";
 
     if (!page) {
-      return jsonResponse({ tasks });
+      return jsonResponse({ tasks: includeAttachments ? await enrichTaskAttachmentSummaries(env, tasks) : tasks });
     }
 
     const pageSize = Math.min(50, positiveInteger(url.searchParams.get("pageSize")) || 20);
     const start = (page - 1) * pageSize;
     return jsonResponse({
-      tasks: tasks.slice(start, start + pageSize),
+      tasks: includeAttachments
+        ? await enrichTaskAttachmentSummaries(env, tasks.slice(start, start + pageSize))
+        : tasks.slice(start, start + pageSize),
       pagination: {
         page,
         pageSize,

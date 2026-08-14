@@ -15,6 +15,7 @@ import type {
 import { childIdForUser, listChildren } from "./children";
 import { queueLearningIssueAnalysis } from "./ai-learning-issues";
 import { getTaskById, todayKey } from "./tasks";
+import { publishNotificationChanged } from "./realtime";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const maxPhotoBytes = 10 * 1024 * 1024;
@@ -235,6 +236,60 @@ async function submissionDto(env: Env, row: SubmissionRow): Promise<SubmissionDt
       : null,
     reviewRounds
   };
+}
+
+async function submissionListDtos(env: Env, rows: SubmissionRow[]): Promise<SubmissionDto[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const [photoResult, audioResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT * FROM task_submission_photos
+       WHERE submission_id IN (${placeholders})
+       ORDER BY submission_id ASC, created_at ASC`
+    ).bind(...ids).all<SubmissionPhotoRow>(),
+    env.DB.prepare(
+      `SELECT * FROM task_submission_audios
+       WHERE submission_id IN (${placeholders})`
+    ).bind(...ids).all<SubmissionAudioRow>()
+  ]);
+  const photosBySubmission = new Map<string, SubmissionPhotoRow[]>();
+  for (const photo of photoResult.results) {
+    const photos = photosBySubmission.get(photo.submission_id) || [];
+    photos.push(photo);
+    photosBySubmission.set(photo.submission_id, photos);
+  }
+  const audioBySubmission = new Map(audioResult.results.map((audio) => [audio.submission_id, audio]));
+
+  return rows.map((row) => {
+    const photos = photosBySubmission.get(row.id) || [];
+    const audio = audioBySubmission.get(row.id) || null;
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      childId: row.child_id,
+      childName: row.child_name || "",
+      taskDate: row.task_date,
+      taskTitle: row.task_title,
+      scheduleTime: row.schedule_time,
+      note: row.note,
+      status: row.status,
+      photoCount: photos.length,
+      photos: photos.map(photoDto),
+      audio: audio ? audioDto(audio) : null,
+      audioFeedback: row.audio_feedback || "",
+      createdAt: row.created_at,
+      submittedAt: row.submitted_at,
+      reviewedAt: row.reviewed_at,
+      finalizedAt: row.finalized_at,
+      reviewImageUrl: row.review_id && row.review_access_token
+        ? `/api/review-files/${row.review_id}?token=${encodeURIComponent(row.review_access_token)}`
+        : null,
+      // List consumers only render the current attachments. Full review history
+      // remains available from the submission-detail endpoint on demand.
+      reviewRounds: []
+    };
+  });
 }
 
 async function getSubmissionRow(env: Env, submissionId: string) {
@@ -639,6 +694,7 @@ export async function submitReview(
     }
 
     await scheduleRevisionReminder(env, submission, reviewedAt);
+    await publishNotificationChanged(env, recipient.child_user_id);
     await queueLearningIssueAnalysisSafely(env, submissionId, analysisRoundId);
     const updated = await getSubmissionRow(env, submissionId);
     return updated ? submissionDto(env, updated) : null;
@@ -734,6 +790,7 @@ export async function submitReview(
   ]);
 
   await scheduleRevisionReminder(env, submission, reviewedAt);
+  await publishNotificationChanged(env, recipient.child_user_id);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -811,6 +868,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
   ]);
 
   await scheduleRevisionReminder(env, submission, reviewedAt);
+  await publishNotificationChanged(env, recipient.child_user_id);
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
@@ -843,7 +901,6 @@ export async function listSubmissions(
   const childPlaceholders = childIds.map(() => "?").join(", ");
   // Timestamps are persisted as local UTC+8 wall-clock strings, so filtering
   // by date must use the stored value directly.
-  const submittedDate = "DATE(task_submissions.submitted_at)";
   const conditions = [
     `task_submissions.child_id IN (${childPlaceholders})`,
     "task_submissions.status = ?"
@@ -851,18 +908,17 @@ export async function listSubmissions(
   const values: Array<string | number> = [...childIds, options.status || "submitted"];
 
   if (options.date) {
-    conditions.push(`${submittedDate} = ?`);
-    values.push(options.date);
-  }
-
-  if (options.dateFrom && options.dateTo) {
-    conditions.push(`${submittedDate} BETWEEN ? AND ?`);
-    values.push(options.dateFrom, options.dateTo);
+    conditions.push("task_submissions.submitted_at >= ? AND task_submissions.submitted_at < ?");
+    values.push(`${options.date} 00:00:00`, `${nextDateKey(options.date)} 00:00:00`);
+  } else if (options.dateFrom && options.dateTo) {
+    conditions.push("task_submissions.submitted_at >= ? AND task_submissions.submitted_at < ?");
+    values.push(`${options.dateFrom} 00:00:00`, `${nextDateKey(options.dateTo)} 00:00:00`);
   }
 
   if (options.keyword) {
-    conditions.push("LOWER(COALESCE(task_occurrence_overrides.title, tasks.title)) LIKE ?");
-    values.push(`%${options.keyword.trim().toLowerCase()}%`);
+    conditions.push("(LOWER(COALESCE(task_occurrence_overrides.title, tasks.title)) LIKE ? OR LOWER(task_submissions.note) LIKE ?)");
+    const keyword = `%${options.keyword.trim().toLowerCase()}%`;
+    values.push(keyword, keyword);
   }
 
   if (options.reviewStatus === "completed") {
@@ -908,9 +964,15 @@ export async function listSubmissions(
     .all<SubmissionRow>();
 
   return {
-    submissions: await Promise.all(result.results.map((row) => submissionDto(env, row))),
+    submissions: await submissionListDtos(env, result.results),
     total: total?.count || 0
   };
+}
+
+function nextDateKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 export async function deleteSubmission(env: Env, user: AuthUser, submissionId: string) {
@@ -1086,6 +1148,7 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
       closedAt
     )] : [])
   ]);
+  await publishNotificationChanged(env, recipient?.child_user_id);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;
 }

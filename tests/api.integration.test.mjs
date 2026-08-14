@@ -129,6 +129,9 @@ before(async () => {
     compatibilityDate: "2026-07-21",
     d1Databases: ["DB"],
     r2Buckets: ["SUBMISSION_FILES"],
+    durableObjects: {
+      USER_REALTIME: { className: "UserRealtime", useSQLite: true }
+    },
     bindings: {
       JWT_SECRET: jwtSecret,
       ADMIN_INITIAL_PASSWORD: adminPassword,
@@ -194,6 +197,27 @@ describe("Starbud Worker API", () => {
     assert.equal(parent.user.role, "parent");
     assert.equal(child.user.role, "child");
     assert.equal(admin.user.role, "admin");
+
+    const realtimeResponse = await runtime.dispatchFetch(`${baseUrl}/api/realtime`, {
+      headers: {
+        upgrade: "websocket",
+        "sec-websocket-protocol": `starbud-realtime, token.${child.token}`
+      }
+    });
+    assert.equal(realtimeResponse.status, 101);
+    assert.equal(realtimeResponse.headers.get("sec-websocket-protocol"), "starbud-realtime");
+    const realtimeSocket = realtimeResponse.webSocket;
+    assert.ok(realtimeSocket);
+    realtimeSocket.accept();
+    const connectedSignal = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Realtime connection timed out")), 1000);
+      realtimeSocket.addEventListener("message", (event) => {
+        clearTimeout(timeout);
+        resolve(JSON.parse(String(event.data)));
+      }, { once: true });
+    });
+    assert.equal(connectedSignal.type, "connected");
+    realtimeSocket.close(1000, "test-complete");
 
     const me = await api("/api/me", { token: parent.token, client: "web" });
     assert.equal(me.body.user.username, "zhaotao");
@@ -296,6 +320,11 @@ describe("Starbud Worker API", () => {
     assert.ok(taskList.body.tasks.some((item) => item.id === taskId));
     assert.equal(taskList.body.pagination.page, 1);
 
+    const taskListWithAttachments = await api(`/api/tasks?page=1&pageSize=10&date=${date}&includeAttachments=true`, {
+      token: child.token, client: "web"
+    });
+    assert.ok(taskListWithAttachments.body.tasks.every((item) => "attachmentPhotoCount" in item));
+
     const calendar = await api(`/api/tasks/calendar?dateFrom=${date}&dateTo=${date}`, {
       token: child.token, client: "mini_program"
     });
@@ -381,6 +410,20 @@ describe("Starbud Worker API", () => {
       token: parent.token, client: "web"
     });
     assert.ok(submissions.body.submissions.some((item) => item.id === submissionId));
+    const listSubmission = submissions.body.submissions.find((item) => item.id === submissionId);
+    assert.equal(listSubmission.photos.length, 1);
+    assert.ok(listSubmission.audio);
+    assert.deepEqual(listSubmission.reviewRounds, []);
+
+    const todaySubmissions = await api(`/api/submissions?page=1&pageSize=10&date=${date}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(todaySubmissions.body.submissions.some((item) => item.id === submissionId));
+
+    const noteSearch = await api(`/api/submissions?page=1&pageSize=10&keyword=${encodeURIComponent("补充说明已更新")}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(noteSearch.body.submissions.some((item) => item.id === submissionId));
 
     const reviewUpload = new FormData();
     reviewUpload.append("images", new File([photoData], "review.png", { type: "image/png" }));
@@ -477,6 +520,26 @@ describe("Starbud Worker API", () => {
       method: "POST", token: child.token, client: "desktop_app"
     });
     assert.equal(duplicateNotificationRead.body.ok, false);
+
+    const reopened = await api(`/api/submissions/${submissionId}/resubmit`, {
+      method: "POST", token: child.token, client: "mini_program"
+    });
+    assert.equal(reopened.body.submission.status, "draft");
+    const resubmissionPhoto = new FormData();
+    resubmissionPhoto.append("photo", new File([photoData], "homework-again.png", { type: "image/png" }));
+    await api(`/api/submissions/${submissionId}/photos`, {
+      method: "POST", token: child.token, client: "mini_program", body: resubmissionPhoto, status: 201
+    });
+    await api(`/api/submissions/${submissionId}/submit`, {
+      method: "POST", token: child.token, client: "mini_program"
+    });
+    const completedTaskAwaitingReview = await api(`/api/tasks?date=${date}`, {
+      token: parent.token, client: "web"
+    });
+    const resubmittedTask = completedTaskAwaitingReview.body.tasks.find((item) => item.id === taskId);
+    assert.equal(resubmittedTask.status, "completed");
+    assert.equal(resubmittedTask.reviewStatus, "pending_review");
+    assert.ok(resubmittedTask.completedAt);
 
     await api("/api/admin/users", { token: parent.token, client: "web", status: 403 });
     const users = await api("/api/admin/users", { token: admin.token, client: "web" });

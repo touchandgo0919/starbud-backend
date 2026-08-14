@@ -2,6 +2,7 @@ export interface Env {
   APP_TIME_ZONE?: string;
   DB: D1Database;
   SUBMISSION_FILES: R2Bucket;
+  USER_REALTIME: DurableObjectNamespace;
   OPENAI_API_KEY?: string;
   AI_BASE_URL?: string;
   AI_MODEL?: string;
@@ -149,6 +150,9 @@ export interface TaskDto {
   needsRevision: boolean;
   reviewStatus: TaskReviewStatus;
   submissionPhotoCount: number;
+  attachmentPhotoCount?: number;
+  attachmentPreviewUrl?: string | null;
+  hasAudioAttachment?: boolean;
   startDate: string;
   endDate: string | null;
   createdAt: string;

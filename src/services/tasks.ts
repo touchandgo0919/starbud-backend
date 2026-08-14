@@ -2,6 +2,7 @@ import { localTimestamp, randomId } from "../utils";
 import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, TaskOccurrenceOverrideRow, TaskRow } from "../types";
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
+import { publishNotificationChanged } from "./realtime";
 
 const repeatTypes = new Set(["once", "daily", "weekdays", "weekly"]);
 const weekdayNumbers: Record<string, number> = {
@@ -123,9 +124,10 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
   const hasCurrentFinalization = Boolean(
     row.finalized_at && (!row.submitted_at || row.finalized_at >= row.submitted_at)
   );
-  const awaitingParentClose = row.submission_status === "submitted" && !hasCurrentFinalization;
   const requiresPhotoUpload = Boolean(row.require_photo_upload);
-  const taskStatus = !awaitingParentClose && row.record_status === "completed" ? "completed" : "pending";
+  // 完成记录表示任务本身已经完成；重新提交只开启新一轮批改，
+  // 不应把历史完成状态和首页完成统计回退为未完成。
+  const taskStatus = row.record_status === "completed" ? "completed" : "pending";
   const reviewStatus = !requiresPhotoUpload
     ? (taskStatus === "completed" ? "completed" : "not_required")
     : hasCurrentFinalization
@@ -151,7 +153,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
     requiresPhotoUpload,
     status: taskStatus,
     occurrenceDate,
-    completedAt: awaitingParentClose ? null : row.completed_at,
+    completedAt: row.completed_at,
     claimedAt: row.claimed_at || null,
     submissionId: row.submission_id || null,
     submissionStatus: row.submission_status === "draft" || row.submission_status === "submitted"
@@ -173,6 +175,98 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
 function withChildNames(tasks: TaskDto[], children: Array<{ id: string; name: string }>) {
   const names = new Map(children.map((child) => [child.id, child.name]));
   return tasks.map((task) => ({ ...task, childName: names.get(task.childId) || "" }));
+}
+
+interface TaskAttachmentPhotoSnapshot {
+  id?: string;
+}
+
+/**
+ * Hydrates only the attachment data needed by the task table in three bulk
+ * queries. This replaces one full submission-detail HTTP request per row.
+ */
+export async function enrichTaskAttachmentSummaries(env: Env, tasks: TaskDto[]) {
+  const submissionIds = [...new Set(tasks.map((task) => task.submissionId).filter((id): id is string => Boolean(id)))];
+  if (!submissionIds.length) {
+    return tasks.map((task) => ({
+      ...task,
+      attachmentPhotoCount: 0,
+      attachmentPreviewUrl: null,
+      hasAudioAttachment: false
+    }));
+  }
+  const placeholders = submissionIds.map(() => "?").join(", ");
+  const [photoResult, audioResult, roundResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, submission_id, access_token, created_at
+       FROM task_submission_photos
+       WHERE submission_id IN (${placeholders})
+       ORDER BY created_at ASC`
+    ).bind(...submissionIds).all<{ id: string; submission_id: string; access_token: string; created_at: string }>(),
+    env.DB.prepare(
+      `SELECT submission_id
+       FROM task_submission_audios
+       WHERE submission_id IN (${placeholders})`
+    ).bind(...submissionIds).all<{ submission_id: string }>(),
+    env.DB.prepare(
+      `SELECT id, submission_id, photos_json, audio_json, review_access_token
+       FROM submission_review_rounds
+       WHERE submission_id IN (${placeholders})
+       ORDER BY submission_id ASC, sequence ASC`
+    ).bind(...submissionIds).all<{
+      id: string;
+      submission_id: string;
+      photos_json: string;
+      audio_json: string;
+      review_access_token: string;
+    }>()
+  ]);
+
+  const summaries = new Map<string, { photoIds: Set<string>; previewUrl: string | null; hasAudio: boolean }>();
+  const summary = (submissionId: string) => {
+    let value = summaries.get(submissionId);
+    if (!value) {
+      value = { photoIds: new Set(), previewUrl: null, hasAudio: false };
+      summaries.set(submissionId, value);
+    }
+    return value;
+  };
+
+  for (const round of roundResult.results) {
+    const value = summary(round.submission_id);
+    try {
+      const photos = JSON.parse(round.photos_json || "[]") as TaskAttachmentPhotoSnapshot[];
+      photos.forEach((photo, index) => {
+        if (photo.id) value.photoIds.add(photo.id);
+        if (!value.previewUrl) {
+          value.previewUrl = `/api/review-round-photos/${round.id}/${index}?token=${encodeURIComponent(round.review_access_token)}`;
+        }
+      });
+    } catch {
+      // A malformed legacy snapshot must not prevent the task list loading.
+    }
+    try {
+      value.hasAudio ||= (JSON.parse(round.audio_json || "[]") as unknown[]).length > 0;
+    } catch {
+      // Ignore malformed legacy audio snapshots.
+    }
+  }
+  for (const photo of photoResult.results) {
+    const value = summary(photo.submission_id);
+    value.photoIds.add(photo.id);
+    value.previewUrl ||= `/api/submission-files/${photo.id}?token=${encodeURIComponent(photo.access_token)}`;
+  }
+  for (const audio of audioResult.results) summary(audio.submission_id).hasAudio = true;
+
+  return tasks.map((task) => {
+    const value = task.submissionId ? summaries.get(task.submissionId) : null;
+    return {
+      ...task,
+      attachmentPhotoCount: value?.photoIds.size || 0,
+      attachmentPreviewUrl: value?.previewUrl || null,
+      hasAudioAttachment: Boolean(value?.hasAudio)
+    };
+  });
 }
 
 export async function createTask(env: Env, input: CreateTaskInput) {
@@ -966,6 +1060,7 @@ export async function repairTaskStatusForUser(
     }
 
     await env.DB.batch(statements);
+    await publishNotificationChanged(env, submission?.child_user_id);
   }
 
   return getTaskById(env, taskId, date);
@@ -1023,6 +1118,8 @@ export async function remindTaskForUser(
   )
     .bind(randomId("notification"), child.child_user_id, reminder.type, reminder.title, reminder.content, localTimestamp())
     .run();
+
+  await publishNotificationChanged(env, child.child_user_id);
 
   return task;
 }
@@ -1106,6 +1203,8 @@ export async function sendDueClaimReminders(env: Env) {
     ).bind(now, task.task_id, task.task_date)
   ]));
 
+  await Promise.all(result.results.map((task) => publishNotificationChanged(env, task.child_user_id)));
+
   return result.results.length;
 }
 
@@ -1154,6 +1253,8 @@ export async function sendDueRevisionReminders(env: Env) {
        WHERE task_id = ? AND task_date = ? AND reminder_count < 3`
     ).bind(now, task.task_id, task.task_date)
   ]));
+
+  await Promise.all(result.results.map((task) => publishNotificationChanged(env, task.child_user_id)));
 
   return result.results.length;
 }
