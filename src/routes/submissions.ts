@@ -275,13 +275,19 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       if (!images.length) {
         return badRequest("请上传批改后的图片。");
       }
-      const replaceReviewImageId = formData?.get("replaceReviewImageId");
+      const replaceReviewImageIds = formData
+        ? formData.getAll("replaceReviewImageIds").filter((imageId): imageId is string => typeof imageId === "string" && Boolean(imageId))
+        : [];
+      const legacyReplaceReviewImageId = formData?.get("replaceReviewImageId");
+      if (!replaceReviewImageIds.length && typeof legacyReplaceReviewImageId === "string" && legacyReplaceReviewImageId) {
+        replaceReviewImageIds.push(legacyReplaceReviewImageId);
+      }
       const submission = await submitReview(
         env,
         user,
         reviewMatch[1],
         images,
-        typeof replaceReviewImageId === "string" && replaceReviewImageId ? replaceReviewImageId : null
+        replaceReviewImageIds
       );
       return submission ? jsonResponse({ submission }) : notFound();
     }

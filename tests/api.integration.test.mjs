@@ -472,10 +472,24 @@ describe("Starbud Worker API", () => {
 
     const reviewUpload = new FormData();
     reviewUpload.append("images", new File([photoData], "review.png", { type: "image/png" }));
+    reviewUpload.append("images", new File([photoData], "review-2.png", { type: "image/png" }));
     const reviewed = await api(`/api/submissions/${submissionId}/review`, {
       method: "POST", token: parent.token, client: "web", body: reviewUpload
     });
     assert.ok(reviewed.body.submission.reviewImageUrl);
+    const reviewedImages = reviewed.body.submission.reviewRounds.at(-1).reviewImages;
+    assert.equal(reviewedImages.length, 2);
+    const replacementUpload = new FormData();
+    reviewedImages.forEach((image, index) => {
+      replacementUpload.append("images", new File([photoData], `review-updated-${index + 1}.png`, { type: "image/png" }));
+      replacementUpload.append("replaceReviewImageIds", image.id);
+    });
+    const replacedReviews = await api(`/api/submissions/${submissionId}/review`, {
+      method: "POST", token: parent.token, client: "web", body: replacementUpload
+    });
+    const replacedImages = replacedReviews.body.submission.reviewRounds.at(-1).reviewImages;
+    assert.equal(replacedImages.length, 2);
+    assert.deepEqual(replacedImages.map((image) => image.id), reviewedImages.map((image) => image.id));
     await api(`/api/tasks/${taskId}/remind`, {
       method: "POST", token: parent.token, client: "mini_program",
       body: { taskDate: date, reminderType: "revision" }

@@ -580,7 +580,7 @@ export async function submitReview(
   user: AuthUser,
   submissionId: string,
   inputImages: File[],
-  replaceReviewImageId: string | null = null
+  replaceReviewImageIds: string[] = []
 ) {
   if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长或管理员可以提交批改。");
@@ -616,8 +616,101 @@ export async function submitReview(
   }
 
   const reviewedAt = localTimestamp();
+  if (replaceReviewImageIds.length && replaceReviewImageIds.length !== inputImages.length) {
+    throw new Error("重新批改图片与原批改图片数量不一致。");
+  }
+
+  if (replaceReviewImageIds.length > 1) {
+    const notificationId = randomId("notification");
+    const updateStatements: D1PreparedStatement[] = [];
+    const analysisRoundIds = new Set<string>();
+    let latestReviewId = "";
+    let latestObjectKey = "";
+    let latestAccessToken = "";
+    let latestContentType = "";
+    let latestByteSize = 0;
+
+    for (let index = 0; index < replaceReviewImageIds.length; index += 1) {
+      const replaceReviewImageId = replaceReviewImageIds[index];
+      const image = inputImages[index];
+      const accessToken = randomId("review-file");
+
+      if (replaceReviewImageId.startsWith("legacy-")) {
+        const roundId = replaceReviewImageId.slice("legacy-".length);
+        const round = await env.DB.prepare(
+          `SELECT * FROM submission_review_rounds
+           WHERE id = ? AND submission_id = ?
+           LIMIT 1`
+        ).bind(roundId, submissionId).first<ReviewRoundRow>();
+        if (!round) return null;
+
+        await env.SUBMISSION_FILES.put(round.review_object_key, image.stream(), {
+          httpMetadata: { contentType: image.type }
+        });
+        updateStatements.push(env.DB.prepare(
+          `UPDATE submission_review_rounds
+           SET review_access_token = ?, review_content_type = ?, reviewed_at = ?
+           WHERE id = ?`
+        ).bind(accessToken, image.type, reviewedAt, roundId));
+        analysisRoundIds.add(roundId);
+        latestReviewId = submission.review_id || replaceReviewImageId;
+        latestObjectKey = round.review_object_key;
+      } else {
+        const reviewImage = await env.DB.prepare(
+          `SELECT submission_review_images.*
+           FROM submission_review_images
+           INNER JOIN submission_review_rounds
+             ON submission_review_rounds.id = submission_review_images.review_round_id
+           WHERE submission_review_images.id = ?
+             AND submission_review_rounds.submission_id = ?
+           LIMIT 1`
+        ).bind(replaceReviewImageId, submissionId).first<ReviewRoundImageRow>();
+        if (!reviewImage) return null;
+
+        await env.SUBMISSION_FILES.put(reviewImage.object_key, image.stream(), {
+          httpMetadata: { contentType: image.type }
+        });
+        updateStatements.push(env.DB.prepare(
+          `UPDATE submission_review_images
+           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?
+           WHERE id = ?`
+        ).bind(accessToken, image.type, image.size, reviewedAt, replaceReviewImageId));
+        analysisRoundIds.add(reviewImage.review_round_id);
+        latestReviewId = replaceReviewImageId;
+        latestObjectKey = reviewImage.object_key;
+      }
+
+      latestAccessToken = accessToken;
+      latestContentType = image.type;
+      latestByteSize = image.size;
+    }
+
+    await env.DB.batch([
+      ...updateStatements,
+      env.DB.prepare(
+        `UPDATE task_submissions
+         SET review_id = ?, review_object_key = ?, review_access_token = ?,
+             review_content_type = ?, review_byte_size = ?, reviewed_at = ?
+         WHERE id = ?`
+      ).bind(latestReviewId, latestObjectKey, latestAccessToken, latestContentType, latestByteSize, reviewedAt, submissionId),
+      env.DB.prepare(
+        `INSERT INTO notifications
+         (id, recipient_user_id, submission_id, type, title, content, created_at)
+         VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
+      ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 ${inputImages.length} 张批改图片已更新，快去看看吧！`, reviewedAt)
+    ]);
+
+    await scheduleRevisionReminder(env, submission, reviewedAt);
+    await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+    for (const roundId of analysisRoundIds) {
+      await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
+    }
+    const updated = await getSubmissionRow(env, submissionId);
+    return updated ? submissionDto(env, updated) : null;
+  }
 
   // 重新批改直接编辑已存在的批改图：更新指定图片，而不是追加新图片。
+  const replaceReviewImageId = replaceReviewImageIds[0] || null;
   if (replaceReviewImageId) {
     if (inputImages.length !== 1) {
       throw new Error("重新批改时一次只能提交一张图片。");
