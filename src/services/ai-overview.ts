@@ -212,7 +212,7 @@ function buildInsights(measures: TaskMeasure[], completionRate: number, completi
 export async function getAiHomeOverview(
   env: Env,
   user: AuthUser,
-  options: { childId?: string; days: 7 | 28 }
+  options: { childId?: string; days: number; from?: string; to?: string }
 ): Promise<AiHomeOverviewDto> {
   const children = await listChildren(env, user);
   const selectedChild = options.childId
@@ -220,10 +220,12 @@ export async function getAiHomeOverview(
     : null;
   if (options.childId && !selectedChild) throw new Error("无权查看该成员的数据。");
 
-  const to = todayKey(env);
-  const from = shiftDateKey(to, -(options.days - 1));
+  const to = options.to || todayKey(env);
+  const from = options.from || shiftDateKey(to, -(options.days - 1));
+  const rangeDays = Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86400000) + 1;
+  if (!Number.isInteger(rangeDays) || rangeDays < 1 || rangeDays > 366) throw new Error("时间范围需为 1 到 366 天。");
   const previousTo = shiftDateKey(from, -1);
-  const previousFrom = shiftDateKey(previousTo, -(options.days - 1));
+  const previousFrom = shiftDateKey(previousTo, -(rangeDays - 1));
   const filters = selectedChild ? { childId: selectedChild.id } : {};
   const [currentTasks, previousTasks, learningIssues] = await Promise.all([
     listTasksForUser(env, user, { ...filters, dateFrom: from, dateTo: to }),
@@ -245,7 +247,7 @@ export async function getAiHomeOverview(
   return {
     generatedAt: localTimestamp(),
     analysisMode: "deterministic",
-    period: { days: options.days, from, to },
+    period: { days: rangeDays, from, to },
     scope: { childId: selectedChild?.id || null, childName: selectedChild?.name || "全部家庭成员" },
     dataStatus,
     confidence,
@@ -257,7 +259,7 @@ export async function getAiHomeOverview(
         },
     metrics: { ...currentMetrics, completionRateDelta },
     weeklyReport: weeklyReport(measures, to),
-    trend: Array.from({ length: options.days }, (_, index) => shiftDateKey(from, index)).map((date) => {
+    trend: Array.from({ length: rangeDays }, (_, index) => shiftDateKey(from, index)).map((date) => {
       const day = measures.filter((item) => item.task.occurrenceDate === date);
       return { date, total: day.length, completed: day.filter((item) => item.completed).length };
     }),

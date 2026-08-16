@@ -23,13 +23,20 @@ export async function handleAi(request: Request, env: Env, url: URL) {
   if (user.role === "child") return forbidden("AI 成长观察仅供家长查看。");
 
   if (request.method === "GET" && url.pathname === "/api/ai/home-overview") {
+    const from = url.searchParams.get("from") || undefined;
+    const to = url.searchParams.get("to") || undefined;
     const days = Number(url.searchParams.get("days") || "28");
-    if (days !== 7 && days !== 28) return badRequest("days 仅支持 7 或 28。");
+    if ((from || to) && (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      return badRequest("自定义时间范围格式不正确。");
+    }
+    if (!from && !to && (!Number.isInteger(days) || days < 1 || days > 366)) return badRequest("days 必须在 1 到 366 之间。");
     try {
       const childId = url.searchParams.get("childId") || undefined;
       const overview = await getAiHomeOverview(env, user, {
         childId,
-        days
+        days,
+        from,
+        to
       });
       return jsonResponse({
         overview: {
