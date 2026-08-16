@@ -65,7 +65,7 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
   if (!childId || !(ownChild || await canManageChild(env, user, childId))) throw new Error("无权查看该儿童的星芽积分。");
   const family = await familyForChild(env, childId);
   if (!family) throw new Error("该儿童尚未加入家庭。");
-  const [settings, balance, rewards, redemptions] = await Promise.all([
+  const [settings, balance, rewards, redemptions, entries] = await Promise.all([
     settingsForFamily(env, family.family_id),
     balanceForChild(env, childId),
     env.DB.prepare("SELECT id, title, point_cost, description, active FROM family_rewards WHERE family_id = ? ORDER BY active DESC, created_at ASC")
@@ -77,7 +77,12 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
        FROM reward_redemptions INNER JOIN children ON children.id = reward_redemptions.child_id
        WHERE reward_redemptions.family_id = ? ${ownChild ? "AND reward_redemptions.child_id = ?" : ""}
        ORDER BY reward_redemptions.requested_at DESC LIMIT 50`
-    ).bind(family.family_id, ...(ownChild ? [childId] : [])).all()
+    ).bind(family.family_id, ...(ownChild ? [childId] : [])).all(),
+    env.DB.prepare(
+      `SELECT entry_type, points, description, created_at
+       FROM child_point_ledger WHERE child_id = ?
+       ORDER BY created_at DESC LIMIT 100`
+    ).bind(childId).all<{ entry_type: string; points: number; description: string; created_at: string }>()
   ]);
   return {
     childId,
@@ -88,7 +93,8 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
       id: String(row.id), title: String(row.reward_title), pointCost: Number(row.point_cost), status: String(row.status),
       requestedAt: String(row.requested_at), confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
       note: String(row.note || ""), childName: String(row.child_name)
-    }))
+    })),
+    entries: entries.results.map((row) => ({ type: row.entry_type, points: row.points, description: row.description, createdAt: row.created_at }))
   };
 }
 
@@ -173,10 +179,12 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
   if (!family) return;
   const settings = await settingsForFamily(env, family.family_id);
   const now = localTimestamp();
+  const task = await env.DB.prepare("SELECT title FROM tasks WHERE id = ? LIMIT 1").bind(taskId).first<{ title: string }>();
+  const taskDescription = `完成任务：${task?.title || "任务"}（${taskDate}）`;
   await env.DB.prepare(
     `INSERT OR IGNORE INTO child_point_ledger (id, family_id, child_id, entry_type, reference_key, points, description, created_at)
-     VALUES (?, ?, ?, 'task_completed', ?, ?, '完成任务', ?)`
-  ).bind(randomId("points"), family.family_id, childId, `${taskId}:${taskDate}`, settings.task_points, now).run();
+     VALUES (?, ?, ?, 'task_completed', ?, ?, ?, ?)`
+  ).bind(randomId("points"), family.family_id, childId, `${taskId}:${taskDate}`, settings.task_points, taskDescription, now).run();
   const dates = await env.DB.prepare(
     `SELECT DISTINCT task_records.date FROM task_records INNER JOIN tasks ON tasks.id = task_records.task_id
      WHERE tasks.child_id = ? AND task_records.status = 'completed' AND task_records.date <= ?
@@ -192,6 +200,6 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
     await env.DB.prepare(
       `INSERT OR IGNORE INTO child_point_ledger (id, family_id, child_id, entry_type, reference_key, points, description, created_at)
        VALUES (?, ?, ?, 'streak_bonus', ?, ?, ?, ?)`
-    ).bind(randomId("points"), family.family_id, childId, taskDate, settings.streak_bonus_points, `连续完成 ${settings.streak_days} 天奖励`, now).run();
+    ).bind(randomId("points"), family.family_id, childId, taskDate, settings.streak_bonus_points, `连续完成 ${settings.streak_days} 天奖励（${taskDate}）`, now).run();
   }
 }
