@@ -1,7 +1,7 @@
 import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { ensureDefaultUsers } from "../db/seed";
 import { getAuthUser } from "../services/auth";
-import { confirmRewardRedemption, getRewardBalances, getRewardCenter, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
+import { confirmRewardRedemption, deleteFamilyReward, getRewardBalances, getRewardCenter, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
 import type { Env } from "../types";
 
 export async function handleRewards(request: Request, env: Env, url: URL) {
@@ -31,6 +31,11 @@ export async function handleRewards(request: Request, env: Env, url: URL) {
       const input = await request.json() as Record<string, unknown>; const familyId = String(input.familyId || "");
       if (!familyId) return badRequest("请选择家庭。");
       await saveFamilyReward(env, user, familyId, input, catalog[1]); return jsonResponse({ updated: true });
+    }
+    if (catalog && request.method === "DELETE") {
+      const familyId = url.searchParams.get("familyId") || "";
+      if (!familyId) return badRequest("请选择家庭。");
+      await deleteFamilyReward(env, user, familyId, catalog[1]); return jsonResponse({ deleted: true });
     }
     if (request.method === "POST" && url.pathname === "/api/rewards/redemptions") {
       const input = await request.json() as { rewardId?: string; note?: string };

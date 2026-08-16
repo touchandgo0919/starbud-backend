@@ -94,7 +94,7 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
   const [settings, balance, rewards, redemptions, entries] = await Promise.all([
     settingsForFamily(env, family.family_id),
     balanceForChild(env, childId),
-    env.DB.prepare("SELECT id, title, point_cost, description, active FROM family_rewards WHERE family_id = ? ORDER BY active DESC, created_at ASC")
+    env.DB.prepare("SELECT id, title, point_cost, description, active FROM family_rewards WHERE family_id = ? AND active = 1 ORDER BY created_at ASC")
       .bind(family.family_id).all<RewardRow>(),
     env.DB.prepare(
       `SELECT reward_redemptions.id, reward_redemptions.reward_title, reward_redemptions.point_cost,
@@ -155,6 +155,15 @@ export async function saveFamilyReward(env: Env, user: AuthUser, familyId: strin
     `INSERT INTO family_rewards (id, family_id, title, point_cost, description, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`
   ).bind(id, familyId, title, pointCost, description, localTimestamp(), localTimestamp()).run();
   return id;
+}
+
+export async function deleteFamilyReward(env: Env, user: AuthUser, familyId: string, rewardId: string) {
+  // 软删除：既不再向儿童展示，也不会破坏既有兑换记录中的奖励快照。
+  await updateRewardSettings(env, user, familyId, {});
+  const result = await env.DB.prepare(
+    "UPDATE family_rewards SET active = 0, updated_at = ? WHERE id = ? AND family_id = ? AND active = 1"
+  ).bind(localTimestamp(), rewardId, familyId).run();
+  if (!result.meta.changes) throw new Error("奖励不存在或已删除。");
 }
 
 export async function requestRewardRedemption(env: Env, user: AuthUser, rewardId: string, note?: string) {
