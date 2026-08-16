@@ -139,6 +139,22 @@ function weeklyReport(measures: TaskMeasure[], to: string) {
   };
 }
 
+async function countReviewedSubmissions(env: Env, childIds: string[], from: string, to: string) {
+  if (!childIds.length) return 0;
+  const placeholders = childIds.map(() => "?").join(", ");
+  const row = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT task_submissions.id) AS count
+     FROM task_submissions
+     INNER JOIN submission_review_rounds
+      ON submission_review_rounds.submission_id = task_submissions.id
+     WHERE task_submissions.child_id IN (${placeholders})
+      AND submission_review_rounds.reviewed_at IS NOT NULL
+      AND substr(submission_review_rounds.reviewed_at, 1, 10) >= ?
+      AND substr(submission_review_rounds.reviewed_at, 1, 10) <= ?`
+  ).bind(...childIds, from, to).first<{ count: number }>();
+  return Number(row?.count || 0);
+}
+
 function buildInsights(measures: TaskMeasure[], completionRate: number, completionRateDelta: number | null) {
   const insights: AiOverviewInsight[] = [];
   const lateClaims = measures
@@ -227,10 +243,11 @@ export async function getAiHomeOverview(
   const previousTo = shiftDateKey(from, -1);
   const previousFrom = shiftDateKey(previousTo, -(rangeDays - 1));
   const filters = selectedChild ? { childId: selectedChild.id } : {};
-  const [currentTasks, previousTasks, learningIssues] = await Promise.all([
+  const [currentTasks, previousTasks, learningIssues, reviewedCount] = await Promise.all([
     listTasksForUser(env, user, { ...filters, dateFrom: from, dateTo: to }),
     listTasksForUser(env, user, { ...filters, dateFrom: previousFrom, dateTo: previousTo }),
-    getLearningIssueOverview(env, user, { childId: selectedChild?.id, from, to })
+    getLearningIssueOverview(env, user, { childId: selectedChild?.id, from, to }),
+    countReviewedSubmissions(env, selectedChild ? [selectedChild.id] : children.map((child) => child.id), from, to)
   ]);
   const measures = currentTasks.map(measureTask);
   const previousMeasures = previousTasks.map(measureTask);
@@ -258,7 +275,7 @@ export async function getAiHomeOverview(
           description: `根据 ${measures.length} 项任务的领取、完成和批改记录生成，所有结论均可查看原始证据。`
         },
     metrics: { ...currentMetrics, completionRateDelta },
-    weeklyReport: weeklyReport(measures, to),
+    weeklyReport: { ...weeklyReport(measures, to), reviewedTasks: reviewedCount },
     trend: Array.from({ length: rangeDays }, (_, index) => shiftDateKey(from, index)).map((date) => {
       const day = measures.filter((item) => item.task.occurrenceDate === date);
       return { date, total: day.length, completed: day.filter((item) => item.completed).length };
