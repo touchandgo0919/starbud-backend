@@ -1,7 +1,12 @@
 import { localTimestamp, randomId } from "../utils";
 import type { AuthUser, Env } from "../types";
 
-type RewardSettingRow = { task_points: number; streak_days: number; streak_bonus_points: number };
+type RewardSettingRow = {
+  task_points: number;
+  streak_days: number;
+  streak_bonus_points: number;
+  same_day_completion_required: number;
+};
 type RewardRow = { id: string; title: string; point_cost: number; description: string; active: number };
 
 function normalizePositive(value: unknown, fallback: number, max: number) {
@@ -42,10 +47,14 @@ async function canManageChild(env: Env, user: AuthUser, childId: string) {
 
 async function settingsForFamily(env: Env, familyId: string): Promise<RewardSettingRow> {
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO family_reward_settings (family_id, task_points, streak_days, streak_bonus_points, updated_at)
-     VALUES (?, 1, 3, 2, ?)`
+    `INSERT OR IGNORE INTO family_reward_settings
+      (family_id, task_points, streak_days, streak_bonus_points, same_day_completion_required, updated_at)
+     VALUES (?, 1, 3, 2, 1, ?)`
   ).bind(familyId, localTimestamp()).run();
-  return (await env.DB.prepare("SELECT task_points, streak_days, streak_bonus_points FROM family_reward_settings WHERE family_id = ?")
+  return (await env.DB.prepare(
+    `SELECT task_points, streak_days, streak_bonus_points, same_day_completion_required
+     FROM family_reward_settings WHERE family_id = ?`
+  )
     .bind(familyId).first<RewardSettingRow>())!;
 }
 
@@ -113,7 +122,12 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
   return {
     childId,
     balance,
-    settings: { taskPoints: settings.task_points, streakDays: settings.streak_days, streakBonusPoints: settings.streak_bonus_points },
+    settings: {
+      taskPoints: settings.task_points,
+      streakDays: settings.streak_days,
+      streakBonusPoints: settings.streak_bonus_points,
+      sameDayCompletionRequired: Boolean(settings.same_day_completion_required)
+    },
     rewards: rewards.results.map(dtoReward),
     redemptions: redemptions.results.map((row) => ({
       id: String(row.id), title: String(row.reward_title), pointCost: Number(row.point_cost), status: String(row.status),
@@ -134,9 +148,14 @@ export async function updateRewardSettings(env: Env, user: AuthUser, familyId: s
   const taskPoints = normalizePositive(input.taskPoints, current.task_points, 100);
   const streakDays = normalizePositive(input.streakDays, current.streak_days, 30);
   const streakBonusPoints = normalizePositive(input.streakBonusPoints, current.streak_bonus_points, 500);
+  const sameDayCompletionRequired = typeof input.sameDayCompletionRequired === "boolean"
+    ? input.sameDayCompletionRequired
+    : Boolean(current.same_day_completion_required);
   await env.DB.prepare(
-    `UPDATE family_reward_settings SET task_points = ?, streak_days = ?, streak_bonus_points = ?, updated_at = ? WHERE family_id = ?`
-  ).bind(taskPoints, streakDays, streakBonusPoints, localTimestamp(), familyId).run();
+    `UPDATE family_reward_settings
+     SET task_points = ?, streak_days = ?, streak_bonus_points = ?, same_day_completion_required = ?, updated_at = ?
+     WHERE family_id = ?`
+  ).bind(taskPoints, streakDays, streakBonusPoints, sameDayCompletionRequired ? 1 : 0, localTimestamp(), familyId).run();
 }
 
 export async function saveFamilyReward(env: Env, user: AuthUser, familyId: string, input: Record<string, unknown>, rewardId?: string) {
@@ -214,6 +233,7 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
   if (!family) return;
   const settings = await settingsForFamily(env, family.family_id);
   const now = localTimestamp();
+  if (settings.same_day_completion_required && now.slice(0, 10) !== taskDate) return;
   const task = await env.DB.prepare("SELECT title FROM tasks WHERE id = ? LIMIT 1").bind(taskId).first<{ title: string }>();
   const taskDescription = `完成任务：${task?.title || "任务"}（${taskDate}）`;
   await env.DB.prepare(
@@ -222,9 +242,12 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
   ).bind(randomId("points"), family.family_id, childId, `${taskId}:${taskDate}`, settings.task_points, taskDescription, now).run();
   const dates = await env.DB.prepare(
     `SELECT DISTINCT task_records.date FROM task_records INNER JOIN tasks ON tasks.id = task_records.task_id
-     WHERE tasks.child_id = ? AND task_records.status = 'completed' AND task_records.date <= ?
+     WHERE tasks.child_id = ?
+       AND task_records.status = 'completed'
+       AND task_records.date <= ?
+       AND (? = 0 OR substr(task_records.completed_at, 1, 10) = task_records.date)
      ORDER BY task_records.date DESC LIMIT ?`
-  ).bind(childId, taskDate, settings.streak_days).all<{ date: string }>();
+  ).bind(childId, taskDate, settings.same_day_completion_required, settings.streak_days).all<{ date: string }>();
   if (dates.results.length !== settings.streak_days) return;
   const expected = new Date(`${taskDate}T12:00:00`);
   const consecutive = dates.results.every((row, index) => {
