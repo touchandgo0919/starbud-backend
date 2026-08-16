@@ -55,6 +55,32 @@ async function balanceForChild(env: Env, childId: string) {
   return row?.balance || 0;
 }
 
+export async function getRewardBalances(env: Env, user: AuthUser) {
+  const ownChild = await childForUser(env, user);
+  const rows = ownChild
+    ? await env.DB.prepare(
+      `SELECT children.id, COALESCE(SUM(child_point_ledger.points), 0) AS balance
+       FROM children
+       LEFT JOIN child_point_ledger ON child_point_ledger.child_id = children.id
+       WHERE children.id = ?
+       GROUP BY children.id`
+    ).bind(ownChild.id).all<{ id: string; balance: number }>()
+    : await env.DB.prepare(
+      `SELECT children.id, COALESCE(SUM(child_point_ledger.points), 0) AS balance
+       FROM children
+       LEFT JOIN child_point_ledger ON child_point_ledger.child_id = children.id
+       WHERE ? = 'admin'
+          OR EXISTS (
+            SELECT 1
+            FROM family_members parent_member
+            INNER JOIN family_members child_member ON child_member.family_id = parent_member.family_id
+            WHERE parent_member.user_id = ? AND child_member.user_id = children.child_user_id
+          )
+       GROUP BY children.id`
+    ).bind(user.role, user.id).all<{ id: string; balance: number }>();
+  return rows.results.map((row) => ({ childId: row.id, balance: Number(row.balance) || 0 }));
+}
+
 function dtoReward(row: RewardRow) {
   return { id: row.id, title: row.title, pointCost: row.point_cost, description: row.description, active: Boolean(row.active) };
 }

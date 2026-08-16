@@ -124,6 +124,7 @@ export async function listReminderRecords(
     childId?: string;
     reminderType?: string;
     status?: string;
+    keyword?: string;
     from?: string;
     to?: string;
     page: number;
@@ -168,6 +169,11 @@ export async function listReminderRecords(
       clauses.push("(reminder_records.push_status = ? OR reminder_records.reminder_status = ?)");
       values.push(filters.status, filters.status);
     }
+  }
+  if (filters.keyword?.trim()) {
+    const keyword = `%${filters.keyword.trim()}%`;
+    clauses.push("(reminder_records.title LIKE ? OR reminder_records.content LIKE ?)");
+    values.push(keyword, keyword);
   }
   if (filters.from) {
     clauses.push("reminder_records.created_at >= ?");

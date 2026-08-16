@@ -1,7 +1,7 @@
 import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { ensureDefaultUsers } from "../db/seed";
 import { getAuthUser } from "../services/auth";
-import { confirmRewardRedemption, getRewardCenter, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
+import { confirmRewardRedemption, getRewardBalances, getRewardCenter, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
 import type { Env } from "../types";
 
 export async function handleRewards(request: Request, env: Env, url: URL) {
@@ -12,6 +12,9 @@ export async function handleRewards(request: Request, env: Env, url: URL) {
   try {
     if (request.method === "GET" && url.pathname === "/api/rewards") {
       return jsonResponse({ center: await getRewardCenter(env, user, url.searchParams.get("childId") || undefined) });
+    }
+    if (request.method === "GET" && url.pathname === "/api/rewards/balances") {
+      return jsonResponse({ balances: await getRewardBalances(env, user) });
     }
     if (request.method === "PUT" && url.pathname === "/api/rewards/settings") {
       const input = await request.json() as Record<string, unknown>;

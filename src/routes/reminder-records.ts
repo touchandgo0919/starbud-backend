@@ -26,6 +26,7 @@ export async function handleReminderRecords(request: Request, env: Env, url: URL
       childId: url.searchParams.get("childId") || undefined,
       reminderType: url.searchParams.get("reminderType") || undefined,
       status: url.searchParams.get("status") || undefined,
+      keyword: url.searchParams.get("keyword") || undefined,
       from: url.searchParams.get("from") || undefined,
       to: url.searchParams.get("to") || undefined,
       page,
