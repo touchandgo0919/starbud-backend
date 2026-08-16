@@ -88,6 +88,57 @@ function metrics(measures: TaskMeasure[]) {
   };
 }
 
+function completedStreakDays(measures: TaskMeasure[], to: string) {
+  const days = new Map<string, TaskMeasure[]>();
+  measures.forEach((measure) => {
+    const date = measure.task.occurrenceDate;
+    if (!date) return;
+    const items = days.get(date) || [];
+    items.push(measure);
+    days.set(date, items);
+  });
+
+  let streak = 0;
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = shiftDateKey(to, -offset);
+    const items = days.get(date);
+    if (!items?.length) continue;
+    if (!items.every((item) => item.completed)) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+function weeklyReport(measures: TaskMeasure[], to: string) {
+  const completedTasks = measures.filter((item) => item.completed).length;
+  const pendingReviewTasks = measures.filter((item) => item.task.reviewStatus === "pending_review").length;
+  const needsRevisionTasks = measures.filter((item) => item.task.reviewStatus === "needs_revision").length;
+  const reviewedTasks = measures.filter((item) => Boolean(item.task.reviewedAt)).length;
+  const completionRate = percentage(completedTasks, measures.length);
+  const averageClaimDelay = roundedAverage(
+    measures
+      .filter((item) => item.claimDelayMinutes !== null)
+      .map((item) => Math.max(0, item.claimDelayMinutes || 0))
+  );
+  const suggestions: string[] = [];
+
+  if (pendingReviewTasks) suggestions.push(`安排一次集中批改，当前有 ${pendingReviewTasks} 项作业等待家长处理。`);
+  if (needsRevisionTasks) suggestions.push(`把 ${needsRevisionTasks} 项待修改任务的完成标准写得更具体，帮助孩子下一次一次完成。`);
+  if (completionRate < 70 && measures.length) suggestions.push("下周优先保留最重要的 1—2 项任务，避免任务过多造成拖延。");
+  if (averageClaimDelay !== null && averageClaimDelay >= 10) suggestions.push("尝试把提醒提前 15 分钟，并观察下一周的领取节奏。");
+  if (!suggestions.length) suggestions.push("当前执行节奏稳定，下周继续保持任务量和提醒时间，再观察一次完整周期。");
+
+  return {
+    completedTasks,
+    totalTasks: measures.length,
+    completionStreakDays: completedStreakDays(measures, to),
+    reviewedTasks,
+    pendingReviewTasks,
+    needsRevisionTasks,
+    nextWeekSuggestions: suggestions.slice(0, 3)
+  };
+}
+
 function buildInsights(measures: TaskMeasure[], completionRate: number, completionRateDelta: number | null) {
   const insights: AiOverviewInsight[] = [];
   const lateClaims = measures
@@ -205,6 +256,7 @@ export async function getAiHomeOverview(
           description: `根据 ${measures.length} 项任务的领取、完成和批改记录生成，所有结论均可查看原始证据。`
         },
     metrics: { ...currentMetrics, completionRateDelta },
+    weeklyReport: weeklyReport(measures, to),
     trend: Array.from({ length: options.days }, (_, index) => shiftDateKey(from, index)).map((date) => {
       const day = measures.filter((item) => item.task.occurrenceDate === date);
       return { date, total: day.length, completed: day.filter((item) => item.completed).length };

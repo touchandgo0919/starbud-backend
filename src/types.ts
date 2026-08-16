@@ -356,6 +356,15 @@ export interface AiHomeOverviewDto {
     averageClaimDelayMinutes: number | null;
     revisionRate: number | null;
   };
+  weeklyReport: {
+    completedTasks: number;
+    totalTasks: number;
+    completionStreakDays: number;
+    reviewedTasks: number;
+    pendingReviewTasks: number;
+    needsRevisionTasks: number;
+    nextWeekSuggestions: string[];
+  };
   trend: Array<{ date: string; completed: number; total: number }>;
   insights: AiOverviewInsight[];
   learningIssues: LearningIssueOverviewDto;

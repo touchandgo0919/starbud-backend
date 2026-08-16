@@ -7,6 +7,7 @@ import { handleReminderRecords } from "./routes/reminder-records";
 import { handleSubmissions } from "./routes/submissions";
 import { handleTasks } from "./routes/tasks";
 import { handleUsers } from "./routes/users";
+import { handleRewards } from "./routes/rewards";
 import { getAuthUser, isAuthConfigured } from "./services/auth";
 import { getAiConfig, isAiConfigured } from "./services/ai";
 import { generateDailyAiAnalyses, shouldRunDailyAiAnalysis } from "./services/ai-analysis";
@@ -115,6 +116,12 @@ export default {
 
     if (userResponse) {
       return trackedResponse(request, env, url, userResponse);
+    }
+
+    const rewardResponse = await handleRewards(request, env, url);
+
+    if (rewardResponse) {
+      return trackedResponse(request, env, url, rewardResponse);
     }
 
     const submissionResponse = await handleSubmissions(request, env, url);

@@ -3,6 +3,7 @@ import type { AuthUser, CreateTaskInput, Env, RepairTaskStatusInput, TaskDto, Ta
 import { childIdForUser } from "./children";
 import { listChildren } from "./children";
 import { publishNotificationChanged } from "./realtime";
+import { awardTaskCompletionPoints } from "./rewards";
 import { annotateNotificationReminder } from "./reminder-records";
 
 const repeatTypes = new Set(["once", "daily", "weekdays", "weekly"]);
@@ -959,7 +960,9 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     throw new Error("附件任务需由小朋友提交照片或录音后，在提交详情中关闭。");
   }
 
-  return completeTask(env, taskId, date);
+  const completed = await completeTask(env, taskId, date);
+  if (completed) await awardTaskCompletionPoints(env, task.childId, taskId, date);
+  return completed;
 }
 
 /** Parent-only recovery tool for correcting accidental claim/completion state. */

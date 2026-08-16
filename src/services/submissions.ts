@@ -16,6 +16,7 @@ import { childIdForUser, listChildren } from "./children";
 import { queueLearningIssueAnalysis } from "./ai-learning-issues";
 import { getTaskById, todayKey } from "./tasks";
 import { publishNotificationChanged } from "./realtime";
+import { awardTaskCompletionPoints } from "./rewards";
 import { markReminderReceived } from "./reminder-records";
 
 const allowedPhotoTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
@@ -1254,6 +1255,7 @@ export async function finalizeSubmissionReview(env: Env, user: AuthUser, submiss
       closedAt
     )] : [])
   ]);
+  await awardTaskCompletionPoints(env, submission.child_id, submission.task_id, submission.task_date);
   if (notificationId) {
     await publishNotificationChanged(env, recipient?.child_user_id, notificationId);
   }
