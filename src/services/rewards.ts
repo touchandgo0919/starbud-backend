@@ -126,7 +126,8 @@ export async function getRewardCenter(env: Env, user: AuthUser, requestedChildId
       taskPoints: settings.task_points,
       streakDays: settings.streak_days,
       streakBonusPoints: settings.streak_bonus_points,
-      sameDayCompletionRequired: Boolean(settings.same_day_completion_required)
+      // Retained for older clients; the server now enforces the fixed rule.
+      sameDayCompletionRequired: true
     },
     rewards: rewards.results.map(dtoReward),
     redemptions: redemptions.results.map((row) => ({
@@ -148,14 +149,13 @@ export async function updateRewardSettings(env: Env, user: AuthUser, familyId: s
   const taskPoints = normalizePositive(input.taskPoints, current.task_points, 100);
   const streakDays = normalizePositive(input.streakDays, current.streak_days, 30);
   const streakBonusPoints = normalizePositive(input.streakBonusPoints, current.streak_bonus_points, 500);
-  const sameDayCompletionRequired = typeof input.sameDayCompletionRequired === "boolean"
-    ? input.sameDayCompletionRequired
-    : Boolean(current.same_day_completion_required);
   await env.DB.prepare(
     `UPDATE family_reward_settings
      SET task_points = ?, streak_days = ?, streak_bonus_points = ?, same_day_completion_required = ?, updated_at = ?
      WHERE family_id = ?`
-  ).bind(taskPoints, streakDays, streakBonusPoints, sameDayCompletionRequired ? 1 : 0, localTimestamp(), familyId).run();
+    // Late completion never earns points. Keep the legacy field enabled so old
+    // data and older clients cannot opt out of the fixed reward rule.
+  ).bind(taskPoints, streakDays, streakBonusPoints, 1, localTimestamp(), familyId).run();
 }
 
 export async function saveFamilyReward(env: Env, user: AuthUser, familyId: string, input: Record<string, unknown>, rewardId?: string) {
@@ -233,7 +233,9 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
   if (!family) return;
   const settings = await settingsForFamily(env, family.family_id);
   const now = localTimestamp();
-  if (settings.same_day_completion_required && now.slice(0, 10) !== taskDate) return;
+  // A task may be completed early, or on its scheduled day. Completing it
+  // after the scheduled day never creates task points or streak credit.
+  if (now.slice(0, 10) > taskDate) return;
   const task = await env.DB.prepare("SELECT title FROM tasks WHERE id = ? LIMIT 1").bind(taskId).first<{ title: string }>();
   const taskDescription = `完成任务：${task?.title || "任务"}（${taskDate}）`;
   await env.DB.prepare(
@@ -245,9 +247,9 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
      WHERE tasks.child_id = ?
        AND task_records.status = 'completed'
        AND task_records.date <= ?
-       AND (? = 0 OR substr(task_records.completed_at, 1, 10) = task_records.date)
+       AND substr(task_records.completed_at, 1, 10) <= task_records.date
      ORDER BY task_records.date DESC LIMIT ?`
-  ).bind(childId, taskDate, settings.same_day_completion_required, settings.streak_days).all<{ date: string }>();
+  ).bind(childId, taskDate, settings.streak_days).all<{ date: string }>();
   if (dates.results.length !== settings.streak_days) return;
   const expected = new Date(`${taskDate}T12:00:00`);
   const consecutive = dates.results.every((row, index) => {

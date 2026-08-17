@@ -451,24 +451,40 @@ describe("Starbud Worker API", () => {
       method: "PUT", token: parent.token, client: "web",
       body: { familyId, taskPoints: 2, streakDays: 2, streakBonusPoints: 5, sameDayCompletionRequired: false }
     });
-    const relaxedRewardCenter = await api(`/api/rewards?childId=${rewardChildRow.id}`, {
+    const fixedRewardCenter = await api(`/api/rewards?childId=${rewardChildRow.id}`, {
       token: parent.token, client: "web"
     });
-    assert.equal(relaxedRewardCenter.body.center.settings.sameDayCompletionRequired, false);
-    const relaxedDelayedTask = await api("/api/tasks", {
+    assert.equal(fixedRewardCenter.body.center.settings.sameDayCompletionRequired, true);
+    const lateTask = await api("/api/tasks", {
       method: "POST", token: parent.token, client: "web", status: 201,
-      body: { childId: rewardChildRow.id, title: "允许延期完成计分", scheduleTime: "19:00", repeatType: "once", requiresPhotoUpload: false, startDate: delayedDate }
+      body: { childId: rewardChildRow.id, title: "逾期完成不计分", scheduleTime: "19:00", repeatType: "once", requiresPhotoUpload: false, startDate: delayedDate }
     });
-    await api(`/api/tasks/${relaxedDelayedTask.body.task.id}/claim`, {
+    await api(`/api/tasks/${lateTask.body.task.id}/claim`, {
       method: "POST", token: rewardChild.token, client: "mini_program", body: { taskDate: delayedDate }
     });
-    await api(`/api/tasks/${relaxedDelayedTask.body.task.id}/complete`, {
+    await api(`/api/tasks/${lateTask.body.task.id}/complete`, {
       method: "POST", token: rewardChild.token, client: "mini_program", body: { taskDate: delayedDate }
     });
-    const relaxedDelayedPoints = await database.prepare(
+    const latePoints = await database.prepare(
       "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'task_completed' AND reference_key = ?"
-    ).bind(rewardChildRow.id, `${relaxedDelayedTask.body.task.id}:${delayedDate}`).first();
-    assert.equal(relaxedDelayedPoints?.points, 2);
+    ).bind(rewardChildRow.id, `${lateTask.body.task.id}:${delayedDate}`).first();
+    assert.equal(latePoints, null);
+
+    const earlyDate = dateKeyOffset(date, 1);
+    const earlyTask = await api("/api/tasks", {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: { childId: rewardChildRow.id, title: "提前完成计分", scheduleTime: "19:00", repeatType: "once", requiresPhotoUpload: false, startDate: earlyDate }
+    });
+    await api(`/api/tasks/${earlyTask.body.task.id}/claim`, {
+      method: "POST", token: rewardChild.token, client: "mini_program", body: { taskDate: earlyDate }
+    });
+    await api(`/api/tasks/${earlyTask.body.task.id}/complete`, {
+      method: "POST", token: rewardChild.token, client: "mini_program", body: { taskDate: earlyDate }
+    });
+    const earlyPoints = await database.prepare(
+      "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'task_completed' AND reference_key = ?"
+    ).bind(rewardChildRow.id, `${earlyTask.body.task.id}:${earlyDate}`).first();
+    assert.equal(earlyPoints?.points, 2);
 
     await database.prepare(
       `INSERT INTO ai_analysis_results (
