@@ -170,3 +170,9 @@ and edit Worker secrets.
 - `GET /api/admin/users` (admin only)
 - `POST /api/admin/users` (admin only)
 - `PATCH /api/admin/users/:id` (admin only)
+
+## License
+
+This project is available for personal learning, research, and other
+non-commercial use only. Commercial use requires prior written permission. See
+[LICENSE](LICENSE) for details.
