@@ -676,14 +676,9 @@ function filterAndSortTasks(
       if (left.occurrenceDate !== right.occurrenceDate) {
         return (left.occurrenceDate || "").localeCompare(right.occurrenceDate || "");
       }
-      if (left.status !== right.status) {
-        return left.status === "pending" ? -1 : 1;
-      }
-      if (left.status === "completed") {
-        return (right.completedAt || right.occurrenceDate || "")
-          .localeCompare(left.completedAt || left.occurrenceDate || "");
-      }
-      return left.scheduleTime.localeCompare(right.scheduleTime);
+      const scheduleOrder = left.scheduleTime.localeCompare(right.scheduleTime);
+      if (scheduleOrder !== 0) return scheduleOrder;
+      return left.title.localeCompare(right.title, "zh-CN");
     });
 }
 
