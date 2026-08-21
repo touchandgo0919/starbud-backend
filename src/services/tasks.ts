@@ -1346,9 +1346,15 @@ export async function deleteTaskForUser(
     return true;
   }
 
-  const todayTask = await getTaskById(env, taskId, today, true);
-  const keepToday = Boolean(todayTask?.claimedAt || todayTask?.submissionId || todayTask?.completedAt);
-  const cutoff = keepToday ? dateKeyOffset(today, 1) : today;
+  // "Future" is relative to the occurrence selected in the calendar. A
+  // future calendar date must never stop earlier instances that are still
+  // scheduled between today and that selected date.
+  const futureStartDate = date > today ? date : today;
+  const firstAffectedTask = await getTaskById(env, taskId, futureStartDate, true);
+  const keepFirstAffectedDate = Boolean(
+    firstAffectedTask?.claimedAt || firstAffectedTask?.submissionId || firstAffectedTask?.completedAt
+  );
+  const cutoff = keepFirstAffectedDate ? dateKeyOffset(futureStartDate, 1) : futureStartDate;
   await env.DB.prepare(
     "UPDATE tasks SET stopped_from_date = ? WHERE id = ? AND active = 1"
   ).bind(cutoff, taskId).run();
