@@ -1336,20 +1336,25 @@ export async function deleteTaskForUser(
   const date = input.date || today;
   if (!parseDateKey(date)) throw new Error("Invalid task date.");
   if (scope === "single") {
-    const result = await env.DB.prepare(
+    await env.DB.prepare(
       `INSERT OR IGNORE INTO task_occurrence_deletions (task_id, task_date, deleted_at)
        VALUES (?, ?, ?)`
     ).bind(taskId, date, localTimestamp()).run();
-    return result.meta.changes > 0;
+    // Repeating the same delete request is harmless. Treat it as success so
+    // the client refreshes an already-hidden occurrence instead of showing a
+    // misleading "not found" error and leaving the dialog open.
+    return true;
   }
 
   const todayTask = await getTaskById(env, taskId, today, true);
   const keepToday = Boolean(todayTask?.claimedAt || todayTask?.submissionId || todayTask?.completedAt);
   const cutoff = keepToday ? dateKeyOffset(today, 1) : today;
-  const result = await env.DB.prepare(
+  await env.DB.prepare(
     "UPDATE tasks SET stopped_from_date = ? WHERE id = ? AND active = 1"
   ).bind(cutoff, taskId).run();
-  return result.meta.changes > 0;
+  // The task was validated above. If it already has this stop marker, the
+  // operation is still a successful, idempotent deletion request.
+  return true;
 }
 
 export async function getTaskById(env: Env, taskId: string, date = todayKey(env), requireOccurrence = false) {
