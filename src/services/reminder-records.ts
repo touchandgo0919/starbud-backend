@@ -172,8 +172,8 @@ export async function listReminderRecords(
   }
   if (filters.keyword?.trim()) {
     const keyword = `%${filters.keyword.trim()}%`;
-    clauses.push("(reminder_records.title LIKE ? OR reminder_records.content LIKE ?)");
-    values.push(keyword, keyword);
+    clauses.push("(reminder_records.title LIKE ? OR reminder_records.content LIKE ? OR users.display_name LIKE ? OR users.username LIKE ?)");
+    values.push(keyword, keyword, keyword, keyword);
   }
   if (filters.from) {
     clauses.push("reminder_records.created_at >= ?");
@@ -196,7 +196,10 @@ export async function listReminderRecords(
        LIMIT ? OFFSET ?`
     ).bind(...values, filters.pageSize, offset).all<ReminderRecordRow>(),
     env.DB.prepare(
-      `SELECT COUNT(*) AS count FROM reminder_records ${where}`
+      `SELECT COUNT(*) AS count
+       FROM reminder_records
+       INNER JOIN users ON users.id = reminder_records.recipient_user_id
+       ${where}`
     ).bind(...values).first<{ count: number }>()
   ]);
 

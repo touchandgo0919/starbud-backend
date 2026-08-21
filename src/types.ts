@@ -113,6 +113,7 @@ export interface TaskRow {
   active: number;
   start_date: string | null;
   end_date: string | null;
+  stopped_from_date: string | null;
   created_at: string;
   record_status: string | null;
   record_date: string | null;

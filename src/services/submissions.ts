@@ -1014,9 +1014,9 @@ export async function listSubmissions(
   }
 
   if (options.keyword) {
-    conditions.push("(LOWER(COALESCE(task_occurrence_overrides.title, tasks.title)) LIKE ? OR LOWER(task_submissions.note) LIKE ?)");
+    conditions.push("(LOWER(COALESCE(task_occurrence_overrides.title, tasks.title)) LIKE ? OR LOWER(task_submissions.note) LIKE ? OR LOWER(children.name) LIKE ?)");
     const keyword = `%${options.keyword.trim().toLowerCase()}%`;
-    values.push(keyword, keyword);
+    values.push(keyword, keyword, keyword);
   }
 
   if (options.reviewStatus === "completed") {
@@ -1035,6 +1035,7 @@ export async function listSubmissions(
      LEFT JOIN task_occurrence_overrides
       ON task_occurrence_overrides.task_id = task_submissions.task_id
       AND task_occurrence_overrides.task_date = task_submissions.task_date
+     INNER JOIN children ON children.id = task_submissions.child_id
      WHERE ${where}`
   )
     .bind(...values)

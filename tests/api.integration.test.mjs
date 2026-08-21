@@ -196,6 +196,56 @@ describe("Starbud Worker API", () => {
     await api("/missing", { status: 404 });
   });
 
+  test("stops future task occurrences without removing historical pending occurrences", async () => {
+    const parent = await login("zhaotao", `zhaotao${passwordSuffix}`, "web");
+    const children = await api("/api/children", { token: parent.token, client: "web" });
+    const targetChild = children.body.children.find((item) => item.name === "赵佑宁");
+    assert.ok(targetChild);
+
+    const today = localDateKey();
+    const yesterday = dateKeyOffset(today, -1);
+    const tomorrow = dateKeyOffset(today, 1);
+    const created = await api("/api/tasks", {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: {
+        childId: targetChild.id,
+        title: `保留历史未开始任务 ${Date.now()}`,
+        scheduleTime: "18:00",
+        repeatType: "daily",
+        requiresPhotoUpload: false,
+        startDate: yesterday
+      }
+    });
+    const taskId = created.body.task.id;
+
+    await api(`/api/tasks/${taskId}`, {
+      method: "DELETE", token: parent.token, client: "web",
+      body: { scope: "future", date: today }
+    });
+
+    const historical = await api(`/api/tasks?date=${yesterday}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(historical.body.tasks.some((task) => task.id === taskId));
+
+    const current = await api(`/api/tasks?date=${today}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(!current.body.tasks.some((task) => task.id === taskId));
+
+    const future = await api(`/api/tasks?date=${tomorrow}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(!future.body.tasks.some((task) => task.id === taskId));
+
+    const database = await runtime.getD1Database("DB");
+    const taskRow = await database.prepare(
+      "SELECT end_date, stopped_from_date FROM tasks WHERE id = ?"
+    ).bind(taskId).first();
+    assert.equal(taskRow.end_date, null);
+    assert.equal(taskRow.stopped_from_date, today);
+  });
+
   test("covers family, task, mini-program submission, review and audit workflows", async () => {
     const parent = await login("zhaotao", `zhaotao${passwordSuffix}`, "web");
     const child = await login("zhaoyouning", `zhaoyouning${passwordSuffix}`, "mini_program");
@@ -329,6 +379,10 @@ describe("Starbud Worker API", () => {
     assert.equal(claimReminderRecord.pushConnectionCount, 1);
     assert.ok(claimReminderRecord.receivedAt);
     assert.equal(claimReminderRecord.reminderStatus, "success");
+    const reminderRecipientSearch = await api(`/api/reminder-records?keyword=${encodeURIComponent(targetChild.name)}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(reminderRecipientSearch.body.records.some((item) => item.notificationId === claimNotification.id));
     await api(`/api/tasks/${taskId}/reminder-result`, {
       method: "POST", token: child.token, client: "desktop_app",
       body: { taskDate: date, title: "定时提醒", content: "完成自动化测试任务", attempt: 1, status: "success" }
@@ -565,6 +619,10 @@ describe("Starbud Worker API", () => {
       token: parent.token, client: "web"
     });
     assert.ok(noteSearch.body.submissions.some((item) => item.id === submissionId));
+    const submitterSearch = await api(`/api/submissions?page=1&pageSize=10&keyword=${encodeURIComponent(targetChild.name)}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(submitterSearch.body.submissions.some((item) => item.id === submissionId));
 
     const reviewUpload = new FormData();
     reviewUpload.append("images", new File([photoData], "review.png", { type: "image/png" }));

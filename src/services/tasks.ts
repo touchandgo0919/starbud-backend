@@ -60,7 +60,8 @@ function storedDateParts(value: string) {
 
 function shouldRunOnDate(
   env: Env,
-  row: Pick<TaskRow, "repeat_type" | "created_at" | "start_date" | "end_date">,
+  row: Pick<TaskRow, "repeat_type" | "created_at" | "start_date" | "end_date">
+    & Partial<Pick<TaskRow, "stopped_from_date">>,
   date = new Date()
 ) {
   const today = dateParts(env, date);
@@ -71,6 +72,7 @@ function shouldRunOnDate(
     return false;
   }
   if (row.end_date && today.key > row.end_date) return false;
+  if (row.stopped_from_date && today.key >= row.stopped_from_date) return false;
 
   if (row.repeat_type === "daily") {
     return true;
@@ -537,9 +539,10 @@ export async function getTodayTasks(env: Env, childId?: string) {
      WHERE tasks.active = 1
       AND tasks.child_id = ?
       AND task_occurrence_deletions.deleted_at IS NULL
+      AND (tasks.stopped_from_date IS NULL OR ? < tasks.stopped_from_date)
      ORDER BY tasks.schedule_time ASC`
   )
-    .bind(date, date, date, date, childId)
+    .bind(date, date, date, date, childId, date)
     .all<TaskRow>();
 
   const overrides = await getOccurrenceOverrides(env, result.results.map((row) => row.id), date, date);
@@ -1191,6 +1194,7 @@ export async function sendDueClaimReminders(env: Env) {
      WHERE tasks.active = 1
       AND tasks.claim_reminder_enabled = 1
       AND (tasks.end_date IS NULL OR task_claim_reminders.task_date <= tasks.end_date)
+      AND (tasks.stopped_from_date IS NULL OR task_claim_reminders.task_date < tasks.stopped_from_date)
       AND task_occurrence_deletions.deleted_at IS NULL
       AND children.child_user_id IS NOT NULL
       AND task_claims.claimed_at IS NULL
@@ -1242,6 +1246,7 @@ export async function sendDueRevisionReminders(env: Env) {
      WHERE tasks.active = 1
       AND tasks.revision_reminder_enabled = 1
       AND (tasks.end_date IS NULL OR task_revision_reminders.task_date <= tasks.end_date)
+      AND (tasks.stopped_from_date IS NULL OR task_revision_reminders.task_date < tasks.stopped_from_date)
       AND task_occurrence_deletions.deleted_at IS NULL
       AND children.child_user_id IS NOT NULL
       AND task_submissions.status = 'submitted'
@@ -1347,8 +1352,8 @@ export async function deleteTaskForUser(
   const keepToday = Boolean(todayTask?.claimedAt || todayTask?.submissionId || todayTask?.completedAt);
   const cutoff = keepToday ? dateKeyOffset(today, 1) : today;
   const result = await env.DB.prepare(
-    "UPDATE tasks SET end_date = ? WHERE id = ? AND active = 1"
-  ).bind(dateKeyOffset(cutoff, -1), taskId).run();
+    "UPDATE tasks SET stopped_from_date = ? WHERE id = ? AND active = 1"
+  ).bind(cutoff, taskId).run();
   return result.meta.changes > 0;
 }
 
