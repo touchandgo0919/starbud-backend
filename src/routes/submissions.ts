@@ -282,12 +282,27 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       if (!replaceReviewImageIds.length && typeof legacyReplaceReviewImageId === "string" && legacyReplaceReviewImageId) {
         replaceReviewImageIds.push(legacyReplaceReviewImageId);
       }
+      const imageMetadata = formData
+        ? formData.getAll("imageMetadata").map((entry) => {
+          if (typeof entry !== "string") return {};
+          try {
+            const parsed = JSON.parse(entry) as { sourcePhotoId?: unknown; annotationJson?: unknown };
+            return {
+              sourcePhotoId: typeof parsed.sourcePhotoId === "string" ? parsed.sourcePhotoId : undefined,
+              annotationJson: typeof parsed.annotationJson === "string" ? parsed.annotationJson : undefined
+            };
+          } catch {
+            return {};
+          }
+        })
+        : [];
       const submission = await submitReview(
         env,
         user,
         reviewMatch[1],
         images,
-        replaceReviewImageIds
+        replaceReviewImageIds,
+        imageMetadata
       );
       return submission ? jsonResponse({ submission }) : notFound();
     }

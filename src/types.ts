@@ -237,6 +237,8 @@ export interface SubmissionPhotoDto {
   contentType: string;
   byteSize: number;
   createdAt: string;
+  sourcePhotoId?: string | null;
+  annotationJson?: string;
 }
 
 export interface SubmissionAudioRow {

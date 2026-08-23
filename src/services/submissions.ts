@@ -113,7 +113,11 @@ interface ReviewRoundImageRow {
   content_type: string;
   byte_size: number;
   created_at: string;
+  source_photo_id: string | null;
+  annotation_json: string;
 }
+
+export type ReviewImageMetadata = { sourcePhotoId?: string; annotationJson?: string };
 
 function reviewRoundPhotos(round: ReviewRoundRow): SubmissionPhotoDto[] {
   const photos = JSON.parse(round.photos_json) as SubmissionPhotoRow[];
@@ -162,7 +166,9 @@ async function reviewRoundImages(env: Env, round: ReviewRoundRow): Promise<Submi
     url: `/api/review-round-images/${image.id}?token=${encodeURIComponent(image.access_token)}`,
     contentType: image.content_type,
     byteSize: image.byte_size,
-    createdAt: image.created_at
+    createdAt: image.created_at,
+    sourcePhotoId: image.source_photo_id,
+    annotationJson: image.annotation_json || ""
   }));
 }
 
@@ -581,7 +587,8 @@ export async function submitReview(
   user: AuthUser,
   submissionId: string,
   inputImages: File[],
-  replaceReviewImageIds: string[] = []
+  replaceReviewImageIds: string[] = [],
+  imageMetadata: ReviewImageMetadata[] = []
 ) {
   if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长或管理员可以提交批改。");
@@ -619,6 +626,9 @@ export async function submitReview(
   const reviewedAt = localTimestamp();
   if (replaceReviewImageIds.length && replaceReviewImageIds.length !== inputImages.length) {
     throw new Error("重新批改图片与原批改图片数量不一致。");
+  }
+  if (imageMetadata.length && imageMetadata.length !== inputImages.length) {
+    throw new Error("批改图片的编辑数据不完整。");
   }
 
   if (replaceReviewImageIds.length > 1) {
@@ -673,9 +683,10 @@ export async function submitReview(
         });
         updateStatements.push(env.DB.prepare(
           `UPDATE submission_review_images
-           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?
+           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?,
+               source_photo_id = COALESCE(?, source_photo_id), annotation_json = ?
            WHERE id = ?`
-        ).bind(accessToken, image.type, image.size, reviewedAt, replaceReviewImageId));
+        ).bind(accessToken, image.type, image.size, reviewedAt, imageMetadata[index]?.sourcePhotoId || null, imageMetadata[index]?.annotationJson || "", replaceReviewImageId));
         analysisRoundIds.add(reviewImage.review_round_id);
         latestReviewId = replaceReviewImageId;
         latestObjectKey = reviewImage.object_key;
@@ -772,9 +783,10 @@ export async function submitReview(
       await env.DB.batch([
         env.DB.prepare(
           `UPDATE submission_review_images
-           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?
+           SET access_token = ?, content_type = ?, byte_size = ?, created_at = ?,
+               source_photo_id = COALESCE(?, source_photo_id), annotation_json = ?
            WHERE id = ?`
-        ).bind(accessToken, image.type, image.size, reviewedAt, replaceReviewImageId),
+        ).bind(accessToken, image.type, image.size, reviewedAt, imageMetadata[0]?.sourcePhotoId || null, imageMetadata[0]?.annotationJson || "", replaceReviewImageId),
         env.DB.prepare(
           `UPDATE task_submissions
            SET review_id = ?, review_object_key = ?, review_access_token = ?,
@@ -861,8 +873,8 @@ export async function submitReview(
     )]),
     ...reviewImages.map((item, index) => env.DB.prepare(
       `INSERT INTO submission_review_images
-       (id, review_round_id, sequence, object_key, access_token, content_type, byte_size, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, review_round_id, sequence, object_key, access_token, content_type, byte_size, created_at, source_photo_id, annotation_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       item.reviewId,
       roundId,
@@ -871,7 +883,9 @@ export async function submitReview(
       item.accessToken,
       item.image.type,
       item.image.size,
-      reviewedAt
+      reviewedAt,
+      imageMetadata[index]?.sourcePhotoId || null,
+      imageMetadata[index]?.annotationJson || ""
     )),
     env.DB.prepare(
       `INSERT INTO notifications
