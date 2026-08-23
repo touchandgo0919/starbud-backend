@@ -588,7 +588,8 @@ export async function submitReview(
   submissionId: string,
   inputImages: File[],
   replaceReviewImageIds: string[] = [],
-  imageMetadata: ReviewImageMetadata[] = []
+  imageMetadata: ReviewImageMetadata[] = [],
+  notify = true
 ) {
   if (user.role !== "parent" && user.role !== "admin") {
     throw new Error("仅家长或管理员可以提交批改。");
@@ -705,15 +706,17 @@ export async function submitReview(
              review_content_type = ?, review_byte_size = ?, reviewed_at = ?
          WHERE id = ?`
       ).bind(latestReviewId, latestObjectKey, latestAccessToken, latestContentType, latestByteSize, reviewedAt, submissionId),
-      env.DB.prepare(
+      ...(notify ? [env.DB.prepare(
         `INSERT INTO notifications
          (id, recipient_user_id, submission_id, type, title, content, created_at)
          VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
-      ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 ${inputImages.length} 张批改图片已更新，快去看看吧！`, reviewedAt)
+      ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 ${inputImages.length} 张批改图片已更新，快去看看吧！`, reviewedAt)] : [])
     ]);
 
-    await scheduleRevisionReminder(env, submission, reviewedAt);
-    await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+    if (notify) {
+      await scheduleRevisionReminder(env, submission, reviewedAt);
+      await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+    }
     for (const roundId of analysisRoundIds) {
       await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
     }
@@ -758,11 +761,11 @@ export async function submitReview(
                review_content_type = ?, review_byte_size = ?, reviewed_at = ?
            WHERE id = ?`
         ).bind(submission.review_id || replaceReviewImageId, round.review_object_key, accessToken, image.type, image.size, reviewedAt, submissionId),
-        env.DB.prepare(
+        ...(notify ? [env.DB.prepare(
           `INSERT INTO notifications
            (id, recipient_user_id, submission_id, type, title, content, created_at)
            VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
-        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)] : [])
       ]);
     } else {
       const reviewImage = await env.DB.prepare(
@@ -793,16 +796,18 @@ export async function submitReview(
                review_content_type = ?, review_byte_size = ?, reviewed_at = ?
            WHERE id = ?`
         ).bind(replaceReviewImageId, reviewImage.object_key, accessToken, image.type, image.size, reviewedAt, submissionId),
-        env.DB.prepare(
+        ...(notify ? [env.DB.prepare(
           `INSERT INTO notifications
            (id, recipient_user_id, submission_id, type, title, content, created_at)
            VALUES (?, ?, ?, 'review_completed', '作业批改已更新', ?, ?)`
-        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)
+        ).bind(notificationId, recipient.child_user_id, submissionId, `你的「${submission.task_title}」有 1 张批改图片已更新，快去看看吧！`, reviewedAt)] : [])
       ]);
     }
 
-    await scheduleRevisionReminder(env, submission, reviewedAt);
-    await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+    if (notify) {
+      await scheduleRevisionReminder(env, submission, reviewedAt);
+      await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+    }
     await queueLearningIssueAnalysisSafely(env, submissionId, analysisRoundId);
     const updated = await getSubmissionRow(env, submissionId);
     return updated ? submissionDto(env, updated) : null;
@@ -887,7 +892,7 @@ export async function submitReview(
       imageMetadata[index]?.sourcePhotoId || null,
       imageMetadata[index]?.annotationJson || ""
     )),
-    env.DB.prepare(
+    ...(notify ? [env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content, created_at)
        VALUES (?, ?, ?, 'review_completed', '作业批改完成', ?, ?)`
@@ -897,11 +902,13 @@ export async function submitReview(
       submissionId,
       `你的「${submission.task_title}」已完成 ${reviewImages.length} 张图片批改，快去看看吧！`,
       reviewedAt
-    )
+    )] : [])
   ]);
 
-  await scheduleRevisionReminder(env, submission, reviewedAt);
-  await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+  if (notify) {
+    await scheduleRevisionReminder(env, submission, reviewedAt);
+    await publishNotificationChanged(env, recipient.child_user_id, notificationId);
+  }
   await queueLearningIssueAnalysisSafely(env, submissionId, roundId);
   const updated = await getSubmissionRow(env, submissionId);
   return updated ? submissionDto(env, updated) : null;

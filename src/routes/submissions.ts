@@ -296,13 +296,16 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
           }
         })
         : [];
+      // 批量批改会逐张保存图片，仅最后一张负责发送一次儿童提醒。
+      const notify = formData?.get("notify") !== "false";
       const submission = await submitReview(
         env,
         user,
         reviewMatch[1],
         images,
         replaceReviewImageIds,
-        imageMetadata
+        imageMetadata,
+        notify
       );
       return submission ? jsonResponse({ submission }) : notFound();
     }
