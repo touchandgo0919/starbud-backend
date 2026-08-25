@@ -233,9 +233,17 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
   if (!family) return;
   const settings = await settingsForFamily(env, family.family_id);
   const now = localTimestamp();
-  // A task may be completed early, or on its scheduled day. Completing it
-  // after the scheduled day never creates task points or streak credit.
-  if (now.slice(0, 10) > taskDate) return;
+  const submission = await env.DB.prepare(
+    `SELECT submitted_at
+     FROM task_submissions
+     WHERE task_id = ? AND child_id = ? AND task_date = ? AND status = 'submitted'
+     LIMIT 1`
+  ).bind(taskId, childId, taskDate).first<{ submitted_at: string | null }>();
+  // 附件任务可在当天（或提前）由儿童提交、之后再由家长批改并关闭。
+  // 因此时效以儿童实际提交日为准，不以家长晚些时候的批改/关闭时间为准。
+  const completedOnTime = now.slice(0, 10) <= taskDate;
+  const submittedOnTime = Boolean(submission?.submitted_at && submission.submitted_at.slice(0, 10) <= taskDate);
+  if (!completedOnTime && !submittedOnTime) return;
   const task = await env.DB.prepare("SELECT title FROM tasks WHERE id = ? LIMIT 1").bind(taskId).first<{ title: string }>();
   const taskDescription = `完成任务：${task?.title || "任务"}（${taskDate}）`;
   await env.DB.prepare(
@@ -243,11 +251,21 @@ export async function awardTaskCompletionPoints(env: Env, childId: string, taskI
      VALUES (?, ?, ?, 'task_completed', ?, ?, ?, ?)`
   ).bind(randomId("points"), family.family_id, childId, `${taskId}:${taskDate}`, settings.task_points, taskDescription, now).run();
   const dates = await env.DB.prepare(
-    `SELECT DISTINCT task_records.date FROM task_records INNER JOIN tasks ON tasks.id = task_records.task_id
+    `SELECT DISTINCT task_records.date
+     FROM task_records
+     INNER JOIN tasks ON tasks.id = task_records.task_id
+     LEFT JOIN task_submissions
+       ON task_submissions.task_id = task_records.task_id
+      AND task_submissions.child_id = tasks.child_id
+      AND task_submissions.task_date = task_records.date
+      AND task_submissions.status = 'submitted'
      WHERE tasks.child_id = ?
        AND task_records.status = 'completed'
        AND task_records.date <= ?
-       AND substr(task_records.completed_at, 1, 10) <= task_records.date
+       AND (
+         substr(task_records.completed_at, 1, 10) <= task_records.date
+         OR substr(task_submissions.submitted_at, 1, 10) <= task_records.date
+       )
      ORDER BY task_records.date DESC LIMIT ?`
   ).bind(childId, taskDate, settings.streak_days).all<{ date: string }>();
   if (dates.results.length !== settings.streak_days) return;

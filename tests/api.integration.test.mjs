@@ -482,6 +482,39 @@ describe("Starbud Worker API", () => {
     ).bind(rewardChildRow.id, `${delayedTask.body.task.id}:${delayedDate}`).first();
     assert.equal(delayedPoints, null);
 
+    const reviewedLaterTask = await api("/api/tasks", {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: { childId: rewardChildRow.id, title: "按时提交晚批改仍计分", scheduleTime: "18:30", repeatType: "once", requiresPhotoUpload: true, startDate: delayedDate }
+    });
+    const reviewedLaterSubmission = await api(`/api/tasks/${reviewedLaterTask.body.task.id}/submissions`, {
+      method: "POST", token: rewardChild.token, client: "mini_program", status: 201,
+      body: { taskDate: delayedDate }
+    });
+    const reviewedLaterSubmissionId = reviewedLaterSubmission.body.submission.id;
+    const reviewedLaterPhoto = new FormData();
+    reviewedLaterPhoto.append("photo", new File([new Uint8Array([137, 80, 78, 71])], "on-time.png", { type: "image/png" }));
+    await api(`/api/submissions/${reviewedLaterSubmissionId}/photos`, {
+      method: "POST", token: rewardChild.token, client: "mini_program", body: reviewedLaterPhoto, status: 201
+    });
+    await api(`/api/submissions/${reviewedLaterSubmissionId}/submit`, {
+      method: "POST", token: rewardChild.token, client: "mini_program"
+    });
+    // 模拟儿童在任务日已按时提交、家长次日才批改并关闭。
+    await database.prepare("UPDATE task_submissions SET submitted_at = ? WHERE id = ?")
+      .bind(`${delayedDate} 20:00:00`, reviewedLaterSubmissionId).run();
+    const reviewedLaterResult = new FormData();
+    reviewedLaterResult.append("images", new File([new Uint8Array([137, 80, 78, 71])], "reviewed-on-time.png", { type: "image/png" }));
+    await api(`/api/submissions/${reviewedLaterSubmissionId}/review`, {
+      method: "POST", token: parent.token, client: "web", body: reviewedLaterResult
+    });
+    await api(`/api/submissions/${reviewedLaterSubmissionId}/finalize-review`, {
+      method: "POST", token: parent.token, client: "web"
+    });
+    const reviewedLaterPoints = await database.prepare(
+      "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'task_completed' AND reference_key = ?"
+    ).bind(rewardChildRow.id, `${reviewedLaterTask.body.task.id}:${delayedDate}`).first();
+    assert.equal(reviewedLaterPoints?.points, 2);
+
     const sameDayTask = await api("/api/tasks", {
       method: "POST", token: parent.token, client: "web", status: 201,
       body: { childId: rewardChildRow.id, title: "当天完成计分", scheduleTime: "18:00", repeatType: "once", requiresPhotoUpload: false, startDate: date }
@@ -499,7 +532,7 @@ describe("Starbud Worker API", () => {
     const strictStreakBonus = await database.prepare(
       "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'streak_bonus' AND reference_key = ?"
     ).bind(rewardChildRow.id, date).first();
-    assert.equal(strictStreakBonus, null);
+    assert.equal(strictStreakBonus?.points, 5);
 
     await api("/api/rewards/settings", {
       method: "PUT", token: parent.token, client: "web",
