@@ -529,6 +529,27 @@ describe("Starbud Worker API", () => {
       "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'task_completed' AND reference_key = ?"
     ).bind(rewardChildRow.id, `${sameDayTask.body.task.id}:${date}`).first();
     assert.equal(sameDayPoints?.points, 2);
+    const redeemableReward = await api("/api/rewards/catalog", {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: { familyId, title: "周末电影", pointCost: 1, description: "家长确认后兑换" }
+    });
+    await api("/api/rewards/redemptions", {
+      method: "POST", token: rewardChild.token, client: "mini_program", status: 201,
+      body: { rewardId: redeemableReward.body.id, note: "想看动画电影" }
+    });
+    const redemptionCenter = await api(`/api/rewards?childId=${rewardChildRow.id}`, {
+      token: parent.token, client: "web"
+    });
+    const pendingRedemption = redemptionCenter.body.center.redemptions.find((item) => item.title === "周末电影" && item.status === "pending");
+    assert.ok(pendingRedemption);
+    assert.equal(pendingRedemption.note, "想看动画电影");
+    await api(`/api/rewards/redemptions/${pendingRedemption.id}/confirm`, {
+      method: "POST", token: parent.token, client: "web", body: { approved: true }
+    });
+    const redemptionCenterAfterConfirmation = await api(`/api/rewards?childId=${rewardChildRow.id}`, {
+      token: parent.token, client: "web"
+    });
+    assert.ok(!redemptionCenterAfterConfirmation.body.center.redemptions.some((item) => item.id === pendingRedemption.id && item.status === "pending"));
     const strictStreakBonus = await database.prepare(
       "SELECT points FROM child_point_ledger WHERE child_id = ? AND entry_type = 'streak_bonus' AND reference_key = ?"
     ).bind(rewardChildRow.id, date).first();
