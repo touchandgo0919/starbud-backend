@@ -316,6 +316,30 @@ describe("Starbud Worker API", () => {
     assert.ok(childCreated.body.family.members.some((item) => item.username === childUsername));
 
     const date = localDateKey();
+    const personalTodo = await api("/api/tasks", {
+      method: "POST", token: parent.token, client: "mini_program", status: 201,
+      body: {
+        targetType: "self",
+        title: `家长待办 ${Date.now()}`,
+        scheduleTime: "21:30",
+        repeatType: "once",
+        voiceEnabled: false,
+        startDate: date
+      }
+    });
+    assert.equal(personalTodo.body.task.isPersonalTodo, true);
+    assert.equal(personalTodo.body.task.requiresPhotoUpload, false);
+    const childrenAfterPersonalTodo = await api("/api/children", { token: parent.token, client: "mini_program" });
+    assert.ok(!childrenAfterPersonalTodo.body.children.some((item) => item.name === "我（待办）"));
+    const parentTaskList = await api(`/api/tasks?page=1&pageSize=50&date=${date}`, {
+      token: parent.token, client: "mini_program"
+    });
+    assert.ok(parentTaskList.body.tasks.some((item) => item.id === personalTodo.body.task.id && item.isPersonalTodo));
+    const personalTodoCompleted = await api(`/api/tasks/${personalTodo.body.task.id}/complete`, {
+      method: "POST", token: parent.token, client: "mini_program", body: { taskDate: date }
+    });
+    assert.equal(personalTodoCompleted.body.task.status, "completed");
+
     const taskCreated = await api("/api/tasks", {
       method: "POST", token: parent.token, client: "web", status: 201,
       body: {

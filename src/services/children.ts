@@ -17,9 +17,9 @@ export async function childIdForUser(env: Env, user: AuthUser) {
 export async function listChildren(env: Env, user: AuthUser) {
   const childId = await childIdForUser(env, user);
   const query = user.role === "admin"
-    ? env.DB.prepare("SELECT id, name, device_id FROM children ORDER BY name ASC")
+    ? env.DB.prepare("SELECT id, name, device_id FROM children WHERE COALESCE(is_parent_todo, 0) = 0 ORDER BY name ASC")
     : childId
-    ? env.DB.prepare("SELECT id, name, device_id FROM children WHERE id = ? ORDER BY name ASC").bind(childId)
+    ? env.DB.prepare("SELECT id, name, device_id FROM children WHERE id = ? AND COALESCE(is_parent_todo, 0) = 0 ORDER BY name ASC").bind(childId)
     : env.DB.prepare(
         `SELECT DISTINCT children.id, children.name, children.device_id
          FROM children
@@ -28,6 +28,7 @@ export async function listChildren(env: Env, user: AuthUser) {
          INNER JOIN family_members parent_member
           ON parent_member.family_id = child_member.family_id
          WHERE parent_member.user_id = ?
+          AND COALESCE(children.is_parent_todo, 0) = 0
          ORDER BY children.name ASC`
       ).bind(user.id);
 

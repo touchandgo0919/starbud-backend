@@ -146,6 +146,7 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
   return {
     id: row.id,
     childId: row.child_id,
+    isPersonalTodo: Boolean(row.is_parent_todo),
     title: row.title,
     scheduleTime: row.schedule_time,
     repeatType: row.repeat_type,
@@ -179,6 +180,43 @@ function toTaskDto(row: TaskRow, occurrenceDate = row.record_date): TaskDto {
 function withChildNames(tasks: TaskDto[], children: Array<{ id: string; name: string }>) {
   const names = new Map(children.map((child) => [child.id, child.name]));
   return tasks.map((task) => ({ ...task, childName: names.get(task.childId) || "" }));
+}
+
+type TaskTarget = { id: string; name: string; isPersonalTodo?: boolean };
+
+async function getParentTodoTarget(env: Env, user: AuthUser, create = false): Promise<TaskTarget | null> {
+  if (user.role !== "parent") return null;
+  const existing = await env.DB.prepare(
+    "SELECT id, name FROM children WHERE child_user_id = ? AND COALESCE(is_parent_todo, 0) = 1 LIMIT 1"
+  ).bind(user.id).first<{ id: string; name: string }>();
+  if (existing) return { ...existing, name: "我（待办）", isPersonalTodo: true };
+  if (!create) return null;
+
+  const id = randomId("parent_todo");
+  await env.DB.prepare(
+    `INSERT INTO children (id, user_id, child_user_id, name, device_id, is_parent_todo, created_at)
+     VALUES (?, ?, ?, ?, NULL, 1, ?)`
+  ).bind(id, user.id, user.id, user.displayName || "我的待办", localTimestamp()).run();
+  return { id, name: "我（待办）", isPersonalTodo: true };
+}
+
+async function listTaskTargets(env: Env, user: AuthUser): Promise<TaskTarget[]> {
+  const children = await listChildren(env, user);
+  if (user.role !== "parent") return children;
+  const todo = await getParentTodoTarget(env, user);
+  return todo ? [...children, todo] : children;
+}
+
+async function canAccessTask(env: Env, user: AuthUser, task: Pick<TaskDto, "childId" | "isPersonalTodo">) {
+  if (user.role === "admin") return true;
+  if (task.isPersonalTodo) {
+    if (user.role !== "parent") return false;
+    const target = await getParentTodoTarget(env, user);
+    return target?.id === task.childId;
+  }
+  return user.role === "child"
+    ? (await childIdForUser(env, user)) === task.childId
+    : canAccessChild(env, user, task.childId);
 }
 
 interface TaskAttachmentPhotoSnapshot {
@@ -375,7 +413,7 @@ export async function updateTaskForUser(
   }
 
   const task = await getTaskById(env, taskId);
-  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) {
+  if (!task || !(await canAccessTask(env, user, task))) {
     return null;
   }
 
@@ -485,7 +523,13 @@ export async function createTaskForUser(env: Env, user: AuthUser, input: CreateT
     throw new Error("仅家长或管理员可以创建任务。");
   }
 
-  const childId = await resolveTaskChildId(env, user, input.childId);
+  const isPersonalTodo = input.targetType === "self";
+  if (isPersonalTodo && user.role !== "parent") {
+    throw new Error("仅家长可以创建自己的待办。");
+  }
+  const childId = isPersonalTodo
+    ? (await getParentTodoTarget(env, user, true))?.id
+    : await resolveTaskChildId(env, user, input.childId);
 
   if (!childId) {
     throw new Error("Task target is required.");
@@ -493,7 +537,11 @@ export async function createTaskForUser(env: Env, user: AuthUser, input: CreateT
 
   return createTask(env, {
     ...input,
-    childId
+    childId,
+    // 个人待办没有儿童提交、批改或催领语义，固定为直接完成型任务。
+    requiresPhotoUpload: isPersonalTodo ? false : input.requiresPhotoUpload,
+    claimReminderEnabled: isPersonalTodo ? false : input.claimReminderEnabled,
+    revisionReminderEnabled: isPersonalTodo ? false : input.revisionReminderEnabled
   });
 }
 
@@ -507,6 +555,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
   const result = await env.DB.prepare(
     `SELECT
       tasks.*,
+      COALESCE((SELECT is_parent_todo FROM children WHERE children.id = tasks.child_id), 0) AS is_parent_todo,
       task_records.status AS record_status,
       task_records.date AS record_date,
       task_records.completed_at AS completed_at,
@@ -555,7 +604,7 @@ export async function getTodayTasks(env: Env, childId?: string) {
 
 export async function getTodayTasksForUser(env: Env, user: AuthUser, requestedChildId?: string) {
   if (user.role !== "child") {
-    const children = await listChildren(env, user);
+    const children = await listTaskTargets(env, user);
     if (!requestedChildId) {
       const tasks = await Promise.all(children.map((child) => getTodayTasks(env, child.id)));
       return withChildNames(tasks.flat(), children).sort((left, right) => left.scheduleTime.localeCompare(right.scheduleTime));
@@ -587,7 +636,7 @@ export async function listTasksForUser(
     dateTo?: string;
   }
 ) {
-  const children = await listChildren(env, user);
+  const children = await listTaskTargets(env, user);
   const selectedChildren = filters.childId
     ? children.filter((child) => child.id === filters.childId)
     : children;
@@ -618,7 +667,7 @@ export async function listTasksForUser(
 }
 
 export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
-  const children = await listChildren(env, user);
+  const children = await listTaskTargets(env, user);
   if (!children.length) return [];
 
   const date = todayKey(env);
@@ -626,6 +675,7 @@ export async function listTaskDefinitionsForUser(env: Env, user: AuthUser) {
   const result = await env.DB.prepare(
     `SELECT
       tasks.*,
+      COALESCE((SELECT is_parent_todo FROM children WHERE children.id = tasks.child_id), 0) AS is_parent_todo,
       task_records.status AS record_status,
       task_records.date AS record_date,
       task_records.completed_at AS completed_at,
@@ -741,6 +791,7 @@ async function getTaskOccurrences(env: Env, childId: string, from: string, to: s
     env.DB.prepare(
       `SELECT
         tasks.*,
+        COALESCE((SELECT is_parent_todo FROM children WHERE children.id = tasks.child_id), 0) AS is_parent_todo,
         NULL AS record_status,
         NULL AS record_date,
         NULL AS completed_at,
@@ -868,6 +919,7 @@ async function getCompletedTasks(env: Env, childId: string) {
   const result = await env.DB.prepare(
     `SELECT
       tasks.*,
+      COALESCE((SELECT is_parent_todo FROM children WHERE children.id = tasks.child_id), 0) AS is_parent_todo,
       task_records.status AS record_status,
       task_records.date AS record_date,
       task_records.completed_at AS completed_at,
@@ -942,12 +994,12 @@ export async function completeTaskForUser(env: Env, user: AuthUser, taskId: stri
     return null;
   }
 
-  if (user.role === "child" && (await childIdForUser(env, user)) !== task.childId) {
+  if (!(await canAccessTask(env, user, task))) {
     return null;
   }
 
-  if (user.role === "parent" && !(await canAccessChild(env, user, task.childId))) {
-    return null;
+  if (task.isPersonalTodo) {
+    return completeTask(env, taskId, date);
   }
 
   if (!task.claimedAt) {
@@ -977,7 +1029,15 @@ export async function repairTaskStatusForUser(
 
   const date = input.taskDate || todayKey(env);
   const task = await getTaskById(env, taskId, date, true);
-  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) return null;
+  if (!task || !(await canAccessTask(env, user, task))) return null;
+  if (task.isPersonalTodo) {
+    if (input.status === "unclaimed") {
+      await env.DB.prepare("DELETE FROM task_records WHERE task_id = ? AND date = ?").bind(taskId, date).run();
+    } else if (input.status === "completed") {
+      await completeTask(env, taskId, date);
+    }
+    return getTaskById(env, taskId, date);
+  }
 
   const submission = await env.DB.prepare(
     `SELECT task_submissions.id, task_submissions.status,
@@ -1086,12 +1146,7 @@ export async function remindTaskForUser(
   const task = await getTaskById(env, taskId, date, true);
   if (!task) return null;
 
-  if (user.role !== "admin") {
-    const children = await listChildren(env, user);
-    if (!children.some((child) => child.id === task.childId)) {
-      return null;
-    }
-  }
+  if (!(await canAccessTask(env, user, task)) || task.isPersonalTodo) return null;
 
   const child = await env.DB.prepare(
     "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
@@ -1318,7 +1373,7 @@ export async function deleteTaskForUser(
 
   const task = await getTaskById(env, taskId);
 
-  if (!task || (user.role !== "admin" && !(await canAccessChild(env, user, task.childId)))) {
+  if (!task || !(await canAccessTask(env, user, task))) {
     return false;
   }
 
@@ -1368,6 +1423,7 @@ export async function getTaskById(env: Env, taskId: string, date = todayKey(env)
   const row = await env.DB.prepare(
     `SELECT
       tasks.*,
+      COALESCE((SELECT is_parent_todo FROM children WHERE children.id = tasks.child_id), 0) AS is_parent_todo,
       task_records.status AS record_status,
       task_records.date AS record_date,
       task_records.completed_at AS completed_at,
@@ -1416,13 +1472,8 @@ export async function getTaskById(env: Env, taskId: string, date = todayKey(env)
 
 export async function getTaskForUser(env: Env, user: AuthUser, taskId: string, taskDate?: string) {
   const task = await getTaskById(env, taskId, taskDate || todayKey(env));
-  if (!task || user.role === "admin") return task;
-
-  if (user.role === "child") {
-    return (await childIdForUser(env, user)) === task.childId ? task : null;
-  }
-
-  return (await canAccessChild(env, user, task.childId)) ? task : null;
+  if (!task) return null;
+  return (await canAccessTask(env, user, task)) ? task : null;
 }
 
 async function resolveTaskChildId(env: Env, user: AuthUser, requestedChildId?: string) {

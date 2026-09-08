@@ -101,6 +101,7 @@ export interface FamilyDto {
 export interface TaskRow {
   id: string;
   child_id: string;
+  is_parent_todo?: number;
   title: string;
   schedule_time: string;
   repeat_type: RepeatType;
@@ -131,6 +132,8 @@ export interface TaskDto {
   id: string;
   childId: string;
   childName?: string;
+  /** 家长给自己创建的待办；不会进入儿童提交、批改或积分流程。 */
+  isPersonalTodo: boolean;
   title: string;
   scheduleTime: string;
   repeatType: RepeatType;
@@ -161,6 +164,7 @@ export interface TaskDto {
 
 export interface CreateTaskInput {
   childId?: string;
+  targetType?: "child" | "self";
   title?: string;
   scheduleTime?: string;
   repeatType?: RepeatType;
