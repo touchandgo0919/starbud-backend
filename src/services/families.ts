@@ -9,6 +9,7 @@ import type {
   UserRow
 } from "../types";
 import { createChildUser } from "./users";
+import { getFamilyMediaAnalysisSetting, setFamilyMediaAnalysisSetting } from "./ai-privacy";
 
 const DEFAULT_RELATIONSHIPS = {
   admin: "管理员",
@@ -196,6 +197,20 @@ export async function removeFamilyMember(
   return result.meta.changes > 0;
 }
 
+export async function updateFamilyAiSettings(
+  env: Env,
+  user: AuthUser,
+  familyId: string,
+  allowMediaAnalysis: unknown
+) {
+  await requireFamilyManager(env, user, familyId);
+  if (typeof allowMediaAnalysis !== "boolean") {
+    throw new Error("请选择是否允许 AI 分析作业图片。");
+  }
+  await setFamilyMediaAnalysisSetting(env, familyId, allowMediaAnalysis, user.id, localTimestamp());
+  return getFamilyForUser(env, familyId, user);
+}
+
 async function getFamilyForUser(env: Env, familyId: string, user: AuthUser) {
   const query = user.role === "admin"
     ? env.DB.prepare("SELECT * FROM families WHERE id = ? LIMIT 1").bind(familyId)
@@ -244,6 +259,7 @@ async function toFamilyDto(env: Env, family: FamilyRow, user: AuthUser): Promise
   }));
 
   const isOwner = family.created_by === user.id;
+  const aiMediaAnalysisEnabled = await getFamilyMediaAnalysisSetting(env, family.id);
 
   return {
     id: family.id,
@@ -252,6 +268,7 @@ async function toFamilyDto(env: Env, family: FamilyRow, user: AuthUser): Promise
     canManage: user.role === "parent" || user.role === "admin",
     canDelete: (isOwner || user.role === "admin") && !Boolean(family.is_default),
     members,
+    aiMediaAnalysisEnabled,
     createdAt: family.created_at
   };
 }

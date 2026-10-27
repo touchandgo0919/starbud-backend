@@ -1,7 +1,7 @@
 import { badRequest, jsonResponse, notFound, unauthorized } from "../http";
 import { ensureDefaultUsers } from "../db/seed";
 import { getAuthUser } from "../services/auth";
-import { confirmRewardRedemption, deleteFamilyReward, getRewardBalances, getRewardCenter, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
+import { confirmRewardRedemption, deleteFamilyReward, getRewardBalances, getRewardCenter, listPendingRedemptions, requestRewardRedemption, saveFamilyReward, updateRewardSettings } from "../services/rewards";
 import type { Env } from "../types";
 
 export async function handleRewards(request: Request, env: Env, url: URL) {
@@ -36,6 +36,10 @@ export async function handleRewards(request: Request, env: Env, url: URL) {
       const familyId = url.searchParams.get("familyId") || "";
       if (!familyId) return badRequest("请选择家庭。");
       await deleteFamilyReward(env, user, familyId, catalog[1]); return jsonResponse({ deleted: true });
+    }
+    if (request.method === "GET" && url.pathname === "/api/rewards/redemptions") {
+      if (url.searchParams.get("status") !== "pending") return badRequest("仅支持查询待确认的兑换申请。");
+      return jsonResponse({ redemptions: await listPendingRedemptions(env, user) });
     }
     if (request.method === "POST" && url.pathname === "/api/rewards/redemptions") {
       const input = await request.json() as { rewardId?: string; note?: string };

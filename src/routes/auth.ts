@@ -4,6 +4,7 @@ import { getAuthUser, isAuthConfigured, loginUser, signToken } from "../services
 import { listChildren } from "../services/children";
 import { registerParent } from "../services/users";
 import { recordAccessEvent } from "../services/access-events";
+import { clearLoginFailures, isLoginThrottled, loginClientIp, recordLoginFailure } from "../services/login-throttle";
 import type { AuthUser, Env } from "../types";
 
 async function recordAuthEvent(env: Env, request: Request, input: Parameters<typeof recordAccessEvent>[1]) {
@@ -87,9 +88,21 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
       return badRequest("Username and password are required.");
     }
 
+    const clientIp = loginClientIp(request);
+    if (await isLoginThrottled(env, input.username, clientIp)) {
+      await recordAuthEvent(env, request, {
+        eventName: "login_attempt",
+        route: url.pathname,
+        outcome: "failure",
+        metadata: { reason: "throttled" }
+      });
+      return jsonResponse({ error: "登录失败次数过多，请 15 分钟后再试。" }, { status: 429 });
+    }
+
     const session = await loginUser(env, input.username.trim(), input.password);
 
     if (!session) {
+      await recordLoginFailure(env, input.username, clientIp);
       await recordAuthEvent(env, request, {
         eventName: "login_attempt",
         route: url.pathname,
@@ -98,6 +111,8 @@ export async function handleAuth(request: Request, env: Env, url: URL) {
       });
       return unauthorized("Invalid username or password.");
     }
+
+    await clearLoginFailures(env, input.username);
 
     await recordAuthEvent(env, request, {
       user: session.user,

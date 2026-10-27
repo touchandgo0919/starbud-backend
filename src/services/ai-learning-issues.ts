@@ -1,6 +1,7 @@
 import type { AuthUser, Env, LearningIssueOverviewDto } from "../types";
 import { localTimestamp, randomId } from "../utils";
 import { createAiResponse, getAiConfig, isAiConfigured } from "./ai";
+import { isMediaAnalysisAllowedForChild } from "./ai-privacy";
 import { listChildren } from "./children";
 
 type LearningIssueCategory = "concept" | "calculation" | "comprehension" | "method" | "expression" | "pronunciation" | "completeness" | "other";
@@ -184,14 +185,35 @@ async function imageContent(env: Env, rows: ReviewImageRow[]) {
   return content;
 }
 
-async function analyzePendingRow(env: Env, row: PendingAnalysisRow) {
-  const reviewedImages = await env.DB.prepare(
-    `SELECT object_key, content_type, byte_size
-     FROM submission_review_images
-     WHERE review_round_id = ?
-     ORDER BY sequence ASC`
-  ).bind(row.review_round_id).all<ReviewImageRow>();
+/**
+ * 作业照片与批改图片只在家庭明确开启图片分析后发送给模型；未开启时返回空列表，
+ * 分析只使用家长的文字评价。
+ */
+export function selectLearningIssueImageRows(options: {
+  allowMediaAnalysis: boolean;
+  reviewedImages: ReviewImageRow[];
+  originalPhotos: ReviewImageRow[];
+}) {
+  if (!options.allowMediaAnalysis) return [];
+  return options.reviewedImages.length ? options.reviewedImages : options.originalPhotos;
+}
+
+/** 没有可用的图片也没有文字评价时无需调用模型。 */
+export function shouldSkipLearningIssueModel(options: { imageCount: number; reviewFeedback: string }) {
+  return options.imageCount === 0 && !options.reviewFeedback.trim();
+}
+
+async function analyzePendingRow(env: Env, row: PendingAnalysisRow, allowMediaAnalysis: boolean) {
+  const reviewedImages = allowMediaAnalysis
+    ? await env.DB.prepare(
+      `SELECT object_key, content_type, byte_size
+       FROM submission_review_images
+       WHERE review_round_id = ?
+       ORDER BY sequence ASC`
+    ).bind(row.review_round_id).all<ReviewImageRow>()
+    : { results: [] as ReviewImageRow[] };
   const originalPhotos = (() => {
+    if (!allowMediaAnalysis) return [];
     try {
       return (JSON.parse(row.photos_json || "[]") as StoredPhoto[]).flatMap((photo): ReviewImageRow[] =>
         photo.object_key && photo.content_type
@@ -202,11 +224,24 @@ async function analyzePendingRow(env: Env, row: PendingAnalysisRow) {
       return [];
     }
   })();
-  const imageRows = reviewedImages.results.length ? reviewedImages.results : originalPhotos;
+  const imageRows = selectLearningIssueImageRows({
+    allowMediaAnalysis,
+    reviewedImages: reviewedImages.results,
+    originalPhotos
+  });
   const images = await imageContent(env, imageRows.map((image) => ({
     ...image,
     byte_size: image.byte_size || MAX_IMAGE_BYTES
   })));
+  const reviewFeedback = row.review_feedback || "";
+  if (shouldSkipLearningIssueModel({ imageCount: images.length, reviewFeedback })) {
+    return normalizeLearningIssueResult({
+      summary: allowMediaAnalysis
+        ? "本次批改没有可分析的图片或文字评价。"
+        : "家庭未开启图片分析，且本次批改没有文字评价，未进行 AI 归纳。",
+      issues: []
+    });
+  }
   const response = await createAiResponse(env, {
     instructions: [
       "你是家庭学习记录整理助手，在家长已经完成批改后归纳历史问题。",
@@ -224,8 +259,10 @@ async function analyzePendingRow(env: Env, row: PendingAnalysisRow) {
           text: JSON.stringify({
             taskTitle: row.task_title,
             taskDate: row.task_date,
-            parentAudioFeedback: row.review_feedback || "未填写",
-            note: "图片为家长已经完成的批改结果；只归纳其中明确指出的问题。"
+            parentAudioFeedback: reviewFeedback || "未填写",
+            note: images.length
+              ? "图片为家长已经完成的批改结果；只归纳其中明确指出的问题。"
+              : "本次没有附带图片，只根据家长的文字评价归纳明确指出的问题。"
           })
         },
         ...images
@@ -261,7 +298,7 @@ export async function processPendingLearningIssueAnalyses(env: Env) {
       "UPDATE ai_learning_issue_analyses SET status = 'processing', model = ?, updated_at = ? WHERE id = ?"
     ).bind(model, startedAt, row.id).run();
     try {
-      const analysis = await analyzePendingRow(env, row);
+      const analysis = await analyzePendingRow(env, row, await isMediaAnalysisAllowedForChild(env, row.child_id));
       const completedAt = localTimestamp();
       await env.DB.prepare(
         `UPDATE ai_learning_issue_analyses

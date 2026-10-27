@@ -561,6 +561,11 @@ describe("Starbud Worker API", () => {
       method: "POST", token: rewardChild.token, client: "mini_program", status: 201,
       body: { rewardId: redeemableReward.body.id, note: "想看动画电影" }
     });
+    const pendingRedemptionInbox = await api("/api/rewards/redemptions?status=pending", {
+      token: parent.token, client: "web"
+    });
+    assert.ok(pendingRedemptionInbox.body.redemptions.some((item) => item.title === "周末电影" && item.childName === "接口测试孩子"));
+    await api("/api/rewards/redemptions?status=pending", { token: rewardChild.token, client: "mini_program", status: 400 });
     const redemptionCenter = await api(`/api/rewards?childId=${rewardChildRow.id}`, {
       token: parent.token, client: "web"
     });
@@ -657,10 +662,18 @@ describe("Starbud Worker API", () => {
     const photoData = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const photoUpload = new FormData();
     photoUpload.append("photo", new File([photoData], "homework.png", { type: "image/png" }));
+    photoUpload.append("uploadId", "photo_retry_test_20261027_001");
     const uploaded = await api(`/api/submissions/${submissionId}/photos`, {
       method: "POST", token: child.token, client: "mini_program", body: photoUpload, status: 201
     });
     assert.equal(uploaded.body.photo.contentType, "image/png");
+    const photoRetry = new FormData();
+    photoRetry.append("photo", new File([photoData], "homework.png", { type: "image/png" }));
+    photoRetry.append("uploadId", "photo_retry_test_20261027_001");
+    const retried = await api(`/api/submissions/${submissionId}/photos`, {
+      method: "POST", token: child.token, client: "mini_program", body: photoRetry, status: 201
+    });
+    assert.equal(retried.body.photo.id, uploaded.body.photo.id);
 
     const audioUpload = new FormData();
     audioUpload.append("audio", new File([new Uint8Array([1, 2, 3, 4])], "answer.mp3", { type: "audio/mpeg" }));
@@ -846,5 +859,98 @@ describe("Starbud Worker API", () => {
       method: "DELETE", token: parent.token, client: "web"
     });
     await api(`/api/tasks/${taskId}`, { method: "DELETE", token: parent.token, client: "web" });
+  });
+  test("keeps AI media analysis off until a parent opts in and supports text-only mobile review", async () => {
+    const parent = await login("zhaotao", `zhaotao${passwordSuffix}`, "web");
+    const family = await api("/api/families", {
+      method: "POST", token: parent.token, client: "web", body: { name: "隐私测试家庭" }, status: 201
+    });
+    const familyId = family.body.family.id;
+    assert.equal(family.body.family.aiMediaAnalysisEnabled, false);
+
+    const childUsername = `privacy-child-${Date.now()}`;
+    await api(`/api/families/${familyId}/children`, {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: { username: childUsername, displayName: "隐私测试孩子", password: "child-test-123", relationship: "孩子" }
+    });
+    const child = await login(childUsername, "child-test-123", "mini_program");
+    await api(`/api/families/${familyId}/ai-settings`, {
+      method: "PATCH", token: child.token, client: "mini_program", body: { allowMediaAnalysis: true }, status: 400
+    });
+    await api(`/api/families/${familyId}/ai-settings`, {
+      method: "PATCH", token: parent.token, client: "web", body: { allowMediaAnalysis: "yes" }, status: 400
+    });
+    const enabled = await api(`/api/families/${familyId}/ai-settings`, {
+      method: "PATCH", token: parent.token, client: "web", body: { allowMediaAnalysis: true }
+    });
+    assert.equal(enabled.body.family.aiMediaAnalysisEnabled, true);
+    const disabled = await api(`/api/families/${familyId}/ai-settings`, {
+      method: "PATCH", token: parent.token, client: "web", body: { allowMediaAnalysis: false }
+    });
+    assert.equal(disabled.body.family.aiMediaAnalysisEnabled, false);
+
+    const database = await runtime.getD1Database("DB");
+    const childRow = await database.prepare(
+      `SELECT children.id FROM children INNER JOIN users ON users.id = children.child_user_id WHERE users.username = ? LIMIT 1`
+    ).bind(childUsername).first();
+    const date = localDateKey();
+    const task = await api("/api/tasks", {
+      method: "POST", token: parent.token, client: "web", status: 201,
+      body: { childId: childRow.id, title: "手机端文字批改", scheduleTime: "19:00", repeatType: "once", requiresPhotoUpload: true, startDate: date }
+    });
+    const taskId = task.body.task.id;
+    await api(`/api/tasks/${taskId}/claim`, {
+      method: "POST", token: child.token, client: "mini_program", body: { taskDate: date }
+    });
+    const created = await api(`/api/tasks/${taskId}/submissions`, {
+      method: "POST", token: child.token, client: "mini_program", status: 201, body: { taskDate: date }
+    });
+    const submissionId = created.body.submission.id;
+    const photo = new FormData();
+    photo.append("photo", new File([new Uint8Array([137, 80, 78, 71])], "homework.png", { type: "image/png" }));
+    await api(`/api/submissions/${submissionId}/photos`, {
+      method: "POST", token: child.token, client: "mini_program", body: photo, status: 201
+    });
+    await api(`/api/submissions/${submissionId}/submit`, { method: "POST", token: child.token, client: "mini_program" });
+
+    // 原有录音评价接口仍要求录音；新的文字评价接口可直接用于照片作业。
+    await api(`/api/submissions/${submissionId}/audio-review`, {
+      method: "POST", token: parent.token, client: "mini_program", body: { feedback: "第二题再检查" }, status: 400
+    });
+    await api(`/api/submissions/${submissionId}/comment-review`, {
+      method: "POST", token: child.token, client: "mini_program", body: { feedback: "自己批改" }, status: 400
+    });
+    const commented = await api(`/api/submissions/${submissionId}/comment-review`, {
+      method: "POST", token: parent.token, client: "mini_program", body: { feedback: "第二题再检查一下进位" }
+    });
+    const round = commented.body.submission.reviewRounds.at(-1);
+    assert.equal(round.feedback, "第二题再检查一下进位");
+    assert.equal(round.audios.length, 0);
+    const childTasks = await api(`/api/tasks?dateFrom=${date}&dateTo=${date}`, { token: child.token, client: "mini_program" });
+    assert.equal(childTasks.body.tasks.find((item) => item.id === taskId).reviewStatus, "needs_revision");
+    const notifications = await api("/api/notifications", { token: child.token, client: "mini_program" });
+    assert.ok(notifications.body.notifications.some((item) => item.title === "家长评价已提交"));
+    const queued = await database.prepare(
+      "SELECT status FROM ai_learning_issue_analyses WHERE submission_id = ?"
+    ).bind(submissionId).first();
+    assert.equal(queued?.status, "pending");
+
+    await api(`/api/families/${familyId}`, { method: "DELETE", token: parent.token, client: "web" });
+  });
+
+  test("temporarily blocks repeated failed logins for one account", async () => {
+    const username = `throttle-parent-${Date.now()}`;
+    await api("/api/auth/register", {
+      method: "POST", status: 201,
+      body: { username, displayName: "限流测试家长", password: "parent-test-123" }
+    });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await api("/api/auth/login", { method: "POST", body: { username, password: "wrong-password" }, status: 401 });
+    }
+    const blocked = await api("/api/auth/login", { method: "POST", body: { username, password: "parent-test-123" }, status: 429 });
+    assert.match(blocked.body.error, /15 分钟/);
+    const database = await runtime.getD1Database("DB");
+    await database.prepare("DELETE FROM login_failures WHERE username_key = ?").bind(username).run();
+    await login(username, "parent-test-123", "web");
   });
 });

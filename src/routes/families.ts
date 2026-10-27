@@ -9,6 +9,7 @@ import {
   listFamilies,
   removeFamilyMember,
   renameFamily,
+  updateFamilyAiSettings,
   updateFamilyMember
 } from "../services/families";
 import type { Env } from "../types";
@@ -109,6 +110,19 @@ export async function handleFamilies(request: Request, env: Env, url: URL) {
       return jsonResponse({ family }, { status: 201 });
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : "子女创建失败。");
+    }
+  }
+
+  const aiSettingsMatch = url.pathname.match(/^\/api\/families\/([^/]+)\/ai-settings$/);
+
+  if (aiSettingsMatch && request.method === "PATCH") {
+    const input = (await request.json().catch(() => null)) as { allowMediaAnalysis?: unknown } | null;
+
+    try {
+      const family = await updateFamilyAiSettings(env, user, aiSettingsMatch[1], input?.allowMediaAnalysis);
+      return family ? jsonResponse({ family }) : notFound();
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "AI 隐私设置更新失败。");
     }
   }
 

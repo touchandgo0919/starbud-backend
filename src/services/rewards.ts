@@ -201,6 +201,33 @@ export async function requestRewardRedemption(env: Env, user: AuthUser, rewardId
   return id;
 }
 
+/** 家长首页“待你处理”使用：列出当前账号所在家庭中等待确认的兑换申请。 */
+export async function listPendingRedemptions(env: Env, user: AuthUser) {
+  if (user.role === "child") throw new Error("仅家长可以查看待确认的兑换。");
+  const rows = await env.DB.prepare(
+    `SELECT reward_redemptions.id, reward_redemptions.child_id, reward_redemptions.reward_title,
+            reward_redemptions.point_cost, reward_redemptions.requested_at, reward_redemptions.note,
+            children.name AS child_name
+     FROM reward_redemptions
+     INNER JOIN children ON children.id = reward_redemptions.child_id
+     ${user.role === "admin" ? "" : "INNER JOIN family_members ON family_members.family_id = reward_redemptions.family_id AND family_members.user_id = ?"}
+     WHERE reward_redemptions.status = 'pending'
+     ORDER BY reward_redemptions.requested_at ASC
+     LIMIT 50`
+  ).bind(...(user.role === "admin" ? [] : [user.id])).all<{
+    id: string; child_id: string; reward_title: string; point_cost: number; requested_at: string; note: string; child_name: string;
+  }>();
+  return rows.results.map((row) => ({
+    id: row.id,
+    childId: row.child_id,
+    childName: row.child_name,
+    title: row.reward_title,
+    pointCost: Number(row.point_cost),
+    requestedAt: row.requested_at,
+    note: row.note || ""
+  }));
+}
+
 export async function confirmRewardRedemption(env: Env, user: AuthUser, redemptionId: string, approved: boolean) {
   if (user.role === "child") throw new Error("仅家长可以确认兑换。");
   const redemption = await env.DB.prepare(

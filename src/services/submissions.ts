@@ -421,7 +421,8 @@ export async function uploadSubmissionPhoto(
   env: Env,
   user: AuthUser,
   submissionId: string,
-  photo: File
+  photo: File,
+  uploadId?: string
 ) {
   const childId = await childIdForSubmissionUser(env, user);
   const submission = await getSubmissionRow(env, submissionId);
@@ -434,6 +435,14 @@ export async function uploadSubmissionPhoto(
   }
   if (submission.status !== "draft") {
     throw new Error("作业已经提交，不能继续添加照片。");
+  }
+  if (uploadId) {
+    const existing = await env.DB.prepare("SELECT * FROM task_submission_photos WHERE id = ? LIMIT 1")
+      .bind(uploadId).first<SubmissionPhotoRow>();
+    if (existing) {
+      if (existing.submission_id !== submissionId) throw new Error("照片上传标识已被使用。");
+      return photoDto(existing);
+    }
   }
   if (!allowedPhotoTypes.has(photo.type)) {
     throw new Error("仅支持 JPG、PNG、WebP 或 HEIC 图片。");
@@ -452,8 +461,9 @@ export async function uploadSubmissionPhoto(
     throw new Error("每次最多上传 8 张照片。");
   }
 
-  const id = randomId("photo");
-  const objectKey = `submissions/${childId}/${submissionId}/${id}`;
+  const id = uploadId || randomId("photo");
+  // 并发重试可能同时完成 R2 上传；每次尝试使用独立对象，避免失败方清理成功方的文件。
+  const objectKey = `submissions/${childId}/${submissionId}/${randomId("photo-object")}`;
   const accessToken = randomId("file");
 
   await env.SUBMISSION_FILES.put(objectKey, photo.stream(), {
@@ -470,6 +480,11 @@ export async function uploadSubmissionPhoto(
       .run();
   } catch (error) {
     await env.SUBMISSION_FILES.delete(objectKey);
+    if (uploadId) {
+      const existing = await env.DB.prepare("SELECT * FROM task_submission_photos WHERE id = ? LIMIT 1")
+        .bind(uploadId).first<SubmissionPhotoRow>();
+      if (existing?.submission_id === submissionId) return photoDto(existing);
+    }
     throw error;
   }
 
@@ -915,29 +930,48 @@ export async function submitReview(
 }
 
 export async function submitAudioReview(env: Env, user: AuthUser, submissionId: string, feedbackValue: string) {
+  return submitTextFeedbackReview(env, user, submissionId, feedbackValue, { requireAudio: true });
+}
+
+/**
+ * 家长在手机上直接写文字评价并要求修改：不要求录音或批改图片，
+ * 同样开启新一轮批改记录、通知儿童并安排订正提醒。
+ */
+export async function submitCommentReview(env: Env, user: AuthUser, submissionId: string, feedbackValue: string) {
+  return submitTextFeedbackReview(env, user, submissionId, feedbackValue, { requireAudio: false });
+}
+
+async function submitTextFeedbackReview(
+  env: Env,
+  user: AuthUser,
+  submissionId: string,
+  feedbackValue: string,
+  options: { requireAudio: boolean }
+) {
+  const label = options.requireAudio ? "录音评价" : "评价";
   if (user.role !== "parent" && user.role !== "admin") {
-    throw new Error("仅家长或管理员可以评价录音。");
+    throw new Error(`仅家长或管理员可以填写${label}。`);
   }
 
   const submission = await getSubmissionRow(env, submissionId);
   if (!submission) return null;
   if (submission.status !== "submitted") {
-    throw new Error("小朋友尚未提交作业，暂不能评价录音。");
+    throw new Error(`小朋友尚未提交作业，暂不能填写${label}。`);
   }
   if (submission.finalized_at) {
-    throw new Error("任务已完成，不能修改录音评价。");
+    throw new Error(`任务已完成，不能修改${label}。`);
   }
   if (user.role !== "admin" && !(await listChildren(env, user)).some((child) => child.id === submission.child_id)) {
     return null;
   }
   const audio = await getSubmissionAudio(env, submissionId);
-  if (!audio) {
+  if (options.requireAudio && !audio) {
     throw new Error("当前提交没有录音，无法评价。");
   }
 
   const feedback = feedbackValue.trim();
-  if (!feedback) throw new Error("请填写录音评价。");
-  if (feedback.length > 500) throw new Error("录音评价不能超过 500 个字。");
+  if (!feedback) throw new Error(`请填写${label}。`);
+  if (feedback.length > 500) throw new Error(`${label}不能超过 500 个字。`);
 
   const recipient = await env.DB.prepare(
     "SELECT child_user_id FROM children WHERE id = ? LIMIT 1"
@@ -968,7 +1002,7 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
       submission.note,
       feedback,
       JSON.stringify(photos),
-      JSON.stringify([audio]),
+      JSON.stringify(audio ? [audio] : []),
       roundAccessToken,
       submission.submitted_at,
       reviewedAt
@@ -976,12 +1010,15 @@ export async function submitAudioReview(env: Env, user: AuthUser, submissionId: 
     env.DB.prepare(
       `INSERT INTO notifications
        (id, recipient_user_id, submission_id, type, title, content, created_at)
-       VALUES (?, ?, ?, 'review_completed', '录音评价已提交', ?, ?)`
+       VALUES (?, ?, ?, 'review_completed', ?, ?, ?)`
     ).bind(
       notificationId,
       recipient.child_user_id,
       submissionId,
-      `你的「${submission.task_title}」录音已收到评价，快去看看吧！`,
+      audio ? "录音评价已提交" : "家长评价已提交",
+      audio
+        ? `你的「${submission.task_title}」录音已收到评价，快去看看吧！`
+        : `你的「${submission.task_title}」已收到家长评价，按评价修改后再提交吧！`,
       reviewedAt
     )
   ]);

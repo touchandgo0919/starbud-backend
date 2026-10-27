@@ -49,3 +49,17 @@ test("returns a neutral empty result when the model has no reliable issue", () =
   assert.deepEqual(result.issues, []);
   assert.match(result.summary, /未识别到/);
 });
+
+test("never selects homework or review images unless the family opted in", () => {
+  const reviewedImages = [{ object_key: "review/1.png", content_type: "image/png", byte_size: 10 }];
+  const originalPhotos = [{ object_key: "photo/1.png", content_type: "image/png", byte_size: 0 }];
+  assert.deepEqual(learningIssues.selectLearningIssueImageRows({ allowMediaAnalysis: false, reviewedImages, originalPhotos }), []);
+  assert.deepEqual(learningIssues.selectLearningIssueImageRows({ allowMediaAnalysis: true, reviewedImages, originalPhotos }), reviewedImages);
+  assert.deepEqual(learningIssues.selectLearningIssueImageRows({ allowMediaAnalysis: true, reviewedImages: [], originalPhotos }), originalPhotos);
+});
+
+test("skips the model when there is neither an allowed image nor text feedback", () => {
+  assert.equal(learningIssues.shouldSkipLearningIssueModel({ imageCount: 0, reviewFeedback: "  " }), true);
+  assert.equal(learningIssues.shouldSkipLearningIssueModel({ imageCount: 0, reviewFeedback: "第二题进位错误" }), false);
+  assert.equal(learningIssues.shouldSkipLearningIssueModel({ imageCount: 2, reviewFeedback: "" }), false);
+});

@@ -95,6 +95,8 @@ export interface FamilyDto {
   canManage: boolean;
   canDelete: boolean;
   members: FamilyMemberDto[];
+  /** 家长是否允许把作业照片和批改图片发送给 AI 模型做历史问题分析。 */
+  aiMediaAnalysisEnabled: boolean;
   createdAt: string;
 }
 

@@ -20,6 +20,7 @@ import {
   markNotificationRead,
   reopenSubmissionForResubmit,
   submitAudioReview,
+  submitCommentReview,
   submitReview,
   updateSubmissionNote,
   uploadSubmissionAudio,
@@ -153,6 +154,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
   const finalizeMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/submit$/);
   const reviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/review$/);
   const audioReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/audio-review$/);
+  const commentReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/comment-review$/);
   const resubmitMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/resubmit$/);
   const finalizeReviewMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/finalize-review$/);
   const deleteSubmissionMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)$/);
@@ -167,6 +169,7 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     || Boolean(finalizeMatch)
     || Boolean(reviewMatch)
     || Boolean(audioReviewMatch)
+    || Boolean(commentReviewMatch)
     || Boolean(resubmitMatch)
     || Boolean(finalizeReviewMatch)
     || Boolean(deleteSubmissionMatch)
@@ -238,10 +241,15 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
     if (request.method === "POST" && uploadMatch) {
       const formData = await request.formData().catch(() => null);
       const photo = formData?.get("photo");
+      const uploadId = formData?.get("uploadId");
       if (!(photo instanceof File)) {
         return badRequest("请选择要上传的作业照片。");
       }
-      const uploaded = await uploadSubmissionPhoto(env, user, uploadMatch[1], photo);
+      if (uploadId !== null && uploadId !== undefined &&
+        (typeof uploadId !== "string" || !/^photo_[A-Za-z0-9_-]{16,80}$/.test(uploadId))) {
+        return badRequest("照片上传标识无效。");
+      }
+      const uploaded = await uploadSubmissionPhoto(env, user, uploadMatch[1], photo, uploadId || undefined);
       return uploaded
         ? jsonResponse({ photo: uploaded }, { status: 201 })
         : notFound();
@@ -314,6 +322,13 @@ export async function handleSubmissions(request: Request, env: Env, url: URL) {
       const input = (await request.json().catch(() => null)) as { feedback?: unknown } | null;
       if (!input || typeof input.feedback !== "string") return badRequest("请填写录音评价。");
       const submission = await submitAudioReview(env, user, audioReviewMatch[1], input.feedback);
+      return submission ? jsonResponse({ submission }) : notFound();
+    }
+
+    if (request.method === "POST" && commentReviewMatch) {
+      const input = (await request.json().catch(() => null)) as { feedback?: unknown } | null;
+      if (!input || typeof input.feedback !== "string") return badRequest("请填写评价。");
+      const submission = await submitCommentReview(env, user, commentReviewMatch[1], input.feedback);
       return submission ? jsonResponse({ submission }) : notFound();
     }
 
